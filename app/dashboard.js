@@ -120,19 +120,6 @@ function ExportIcon() {
   return <svg viewBox="0 0 18 18" aria-hidden="true"><path d="M9 2v9M5.7 7.8 9 11.1l3.3-3.3M3 13.5v2h12v-2"/></svg>;
 }
 
-function DashboardLoader({ view }) {
-  const label = { overview: "Building your market overview", heatmap: "Mapping watchlist performance", focus: "Resolving ticker history", watchlist: "Loading your watchlist" }[view];
-  return <section className={`dashboard-loader loader-${view}`} aria-busy="true">
-    <div className="loader-status" role="status" aria-live="polite"><span className="loader-orbit" aria-hidden="true"><i/></span><div><strong>{label}</strong><small>Fetching the latest quotes and market history</small></div></div>
-    <div aria-hidden="true">
-    {view === "overview" && <div className="loader-overview"><div className="loader-chart"><i/><b/><span/></div><div className="loader-stat-stack">{Array.from({ length: 3 }, (_, index) => <i key={index}/>)}</div></div>}
-    {view === "heatmap" && <div className="loader-heatmap-grid" aria-hidden="true">{Array.from({ length: 14 }, (_, index) => <i className={`skeleton-tile tile-${index + 1}`} key={index}><span/></i>)}</div>}
-    {view === "focus" && <div className="loader-focus"><div className="loader-focus-chart"><i/><b/><span/></div><div className="loader-focus-stats">{Array.from({ length: 4 }, (_, index) => <i key={index}/>)}</div></div>}
-    {view === "watchlist" && <div className="loader-list"><div className="loader-list-head"/>{Array.from({ length: 6 }, (_, index) => <div className="loader-list-row" key={index}><i/><span/><span/><span/></div>)}</div>}
-    </div>
-  </section>;
-}
-
 export default function Dashboard({ view = "overview", initialTicker = "", userKey = "", userName = "", userEmail = "" }) {
   const router = useRouter();
   const [stocks, setStocks] = useState([]), [query, setQuery] = useState(""), [period, setPeriod] = useState("1D");
@@ -393,8 +380,6 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
     <main id="top">
       {view === "overview" ? <section className="hero"><div className="hero-copy"><p className="kicker">Aperture / Market overview</p><h1>See the whole<br/>market picture.</h1><p className="hero-sub">A focused view of the companies that matter to you—performance, momentum, and signal in one frame.</p></div><div className="hero-meta"><span>{String(stocks.length).padStart(2, "0")}</span><p>Companies in focus<br/><b>{advancing} advancing today</b></p></div></section> : <section className="page-masthead"><p className="kicker">Aperture / {pageDetails[view][0]}</p><h1>{pageDetails[view][1]}</h1><p>{stocks.length} tracked positions · {advancing} advancing</p></section>}
       <section className="control-row" aria-label="Dashboard controls"><div className="periods"><span>Timeframe</span>{Object.keys(periodBars).map((value) => <button key={value} className={period === value ? "active" : ""} onClick={() => setPeriod(value)}>{value}</button>)}</div><div className="live-controls"><span>{freshness}</span><i>·</i><span>{periodResolution[period]} resolution</span><button type="button" disabled={refreshing || !online} onClick={() => refreshNowRef.current?.()} aria-label={refreshing ? "Refreshing market data" : "Refresh market data now"}>{refreshing ? <span className="button-spinner dark" aria-hidden="true"/> : "↻"} Refresh</button></div></section>
-      {storage === "loading" && <DashboardLoader view={view}/>} 
-
       {storage !== "loading" && view === "overview" && <section className="overview-grid">
         <article className="performance-panel"><div className="panel-top"><div><p className="label">Aggregate performance</p><h2 className={tone(watchlistReturn)}>{percent(watchlistReturn)}</h2><p>Across your Aperture watchlist · {period}</p></div><span className={`trend-badge ${tone(chart?.current)}`}><ArrowIcon /> {percent(chart?.current)}</span></div><div className="chart-wrap"><div className="chart-grid"><span>High</span><span>Avg</span><span>Low</span></div>{chart ? <TimelineChart data={chart} fillId="chartFill" label={`Watchlist performance over ${period}`}/> : <div className="chart-empty">Market history will appear here</div>}<div className="chart-axis"><span>Open</span><span>Midpoint</span><span>Latest</span></div></div></article>
         <aside className="stats-panel"><article><p className="label">Market breadth</p><div className="stat-line"><strong>{breadth}%</strong><span className="positive">{advancing} of {performers.length}</span></div><div className="breadth-bar"><i style={{ width: `${breadth}%` }}/></div><p>of tracked names are advancing</p></article><article><p className="label">Leading position</p>{performers[0] ? <Link className="leader ticker-link" href={`/focus?ticker=${encodeURIComponent(performers[0].ticker)}`}><span className="monogram">{performers[0].ticker.slice(0, 2)}</span><div><strong>{performers[0].ticker}</strong><p>{performers[0].name}</p></div><b className={tone(performers[0].viewedReturn)}>{percent(performers[0].viewedReturn)}</b></Link> : <div className="leader"><span className="monogram">—</span><div><strong>No data</strong><p>Awaiting market feed</p></div><b>—</b></div>}</article><article><p className="label">Aperture signal</p><div className="signal-summary"><strong>{Math.round(performers.reduce((sum, stock) => sum + (stock.signal || 0), 0) / (performers.length || 1))}</strong><span>/ 100<br/><b>Aggregate momentum</b></span></div></article></aside>

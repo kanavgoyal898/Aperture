@@ -129,21 +129,6 @@ html[data-theme="dark"] .hover-point { fill: var(--paper); }
 html[data-theme="dark"] .chart-tooltip { border: 1px solid var(--line); background: var(--surface); color: var(--ink); box-shadow: 0 10px 32px rgba(0,0,0,.38); }
 html[data-theme="dark"] .chart-tooltip::after { bottom: -6px; background: var(--surface); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 html[data-theme="dark"] .chart-tooltip span { color: var(--muted); }
-html[data-theme="dark"] .route-loader-copy span,
-html[data-theme="dark"] .loader-chart i,
-html[data-theme="dark"] .loader-focus-chart i,
-html[data-theme="dark"] .loader-list-head,
-html[data-theme="dark"] .loader-list-row span { background-color: #292c27; }
-html[data-theme="dark"] .loader-chart b,
-html[data-theme="dark"] .loader-focus-chart b,
-html[data-theme="dark"] .loader-list-row i,
-html[data-theme="dark"] .skeleton-tile { background-color: #242722; }
-html[data-theme="dark"] .skeleton-tile span { background: rgba(240,239,232,.09); }
-html[data-theme="dark"] .skeleton-tile::before { background: linear-gradient(115deg,transparent 30%,rgba(255,255,255,.045) 48%,transparent 66%); }
-html[data-theme="dark"] .loader-chart span,
-html[data-theme="dark"] .loader-focus-chart span { background: linear-gradient(165deg,transparent 47%,#343832 48%,#343832 50%,transparent 51%); }
-html[data-theme="dark"] .dashboard-loader::after { background: linear-gradient(90deg,transparent,rgba(255,255,255,.055),transparent); }
-
 @media (max-width: 1300px) {
   .account-identity > div { max-width: 105px; }
   .account-identity small { display: none; }
