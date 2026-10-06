@@ -15,7 +15,6 @@ export async function POST(request) {
     if (password.length < 8 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) return NextResponse.json({ error: "Use at least 8 characters with a letter and number." }, { status: 400 });
 
     const db = await getDatabase();
-    await db.collection("users").createIndex({ email: 1 }, { unique: true });
     const result = await db.collection("users").insertOne({ name, email, passwordHash: await hashPassword(password), createdAt: new Date() });
     const session = await createSession(db, result.insertedId);
     return setSessionCookie(NextResponse.json({ user: { id: result.insertedId.toString(), name, email } }, { status: 201 }), session.token, session.expiresAt);

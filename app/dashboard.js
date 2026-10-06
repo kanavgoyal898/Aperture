@@ -2,8 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import PerformanceTreemap from "./performance-treemap";
+
+const PerformanceTreemap = dynamic(() => import("./performance-treemap"), {
+  loading: () => <div className="performance-treemap" aria-label="Loading performance heat map" />,
+});
 
 const periodBars = {
   "1D": { source: "intradayHistory", session: true },
@@ -25,7 +29,7 @@ const pageDetails = {
   focus: ["The frame", "One ticker. The complete frame."],
   watchlist: ["Your universe", "Every position, precisely organized."],
 };
-const WATCHLIST_CACHE_VERSION = 1;
+const WATCHLIST_CACHE_VERSION = 2;
 const LIVE_REFRESH_INTERVAL_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -42,40 +46,17 @@ function cacheWatchlist(userKey, stocks) {
   }
 }
 
-function timeframeSeries(stock, period) {
-  const config = periodBars[period];
-  let history = stock[config.source] || [];
-  if (history.length < 2) history = stock.history || [];
-  if (history.length < 2 || period === "Max") return history;
-  if (config.session) {
-    if (history === stock.history) return history.slice(-2);
-    let start = 0;
-    for (let index = history.length - 1; index > 0; index -= 1) {
-      if (new Date(history[index].date) - new Date(history[index - 1].date) > 1000 * 60 * 60 * 2) { start = index; break; }
-    }
-    return history.slice(start);
-  }
-  const end = new Date(history.at(-1).date).getTime();
-  const cutoff = end - config.days * 24 * 60 * 60 * 1000;
-  return history.filter((bar) => new Date(bar.date).getTime() >= cutoff);
-}
-
 function periodReturn(stock, period) {
-  const history = timeframeSeries(stock, period);
-  if (history.length < 2) return null;
-  const current = history.at(-1).close;
-  const base = history[0]?.close;
-  return base ? ((current - base) / base) * 100 : null;
+  return Number.isFinite(stock.returns?.[period]) ? stock.returns[period] : null;
 }
 
 function chartData(stocks, period) {
-  const series = (stock) => timeframeSeries(stock, period);
-  const available = Math.max(0, ...stocks.map((stock) => series(stock).length));
+  const series = stocks.map((stock) => stock.periodHistory || []).filter((history) => history.length > 1);
+  const available = Math.max(0, ...series.map((history) => history.length));
   const length = available;
   if (length < 2) return null;
   const values = Array.from({ length }, (_, index) => {
-    const returns = stocks.flatMap((stock) => {
-      const history = series(stock).slice(-length);
+    const returns = series.flatMap((history) => {
       const base = history[0]?.close;
       const alignedIndex = history.length > 1 ? Math.round((index / (length - 1)) * (history.length - 1)) : 0;
       const close = history[alignedIndex]?.close;
@@ -84,10 +65,21 @@ function chartData(stocks, period) {
     return returns.length ? returns.reduce((sum, value) => sum + value, 0) / returns.length : 0;
   });
   const min = Math.min(...values), max = Math.max(...values), spread = max - min || 1;
-  const reference = stocks.map((stock) => series(stock)).sort((a, b) => b.length - a.length)[0]?.slice(-length) || [];
+  const reference = [...series].sort((a, b) => b.length - a.length)[0] || [];
   const samples = values.map((value, index) => ({ value, date: reference[index]?.date, x: (index / (values.length - 1)) * 600, y: 180 - ((value - min) / spread) * 140 }));
   const points = samples.map(({ x, y }) => `${x},${y}`).join(" ");
   return { points, area: `0,220 ${points} 600,220`, current: values.at(-1), samples, showTime: periodBars[period].source === "intradayHistory" || periodBars[period].source === "hourlyHistory" };
+}
+
+function Freshness({ lastUpdated }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const clockId = window.setInterval(() => setNow(Date.now()), 10_000);
+    return () => window.clearInterval(clockId);
+  }, []);
+  const seconds = lastUpdated ? Math.max(0, Math.floor((now - lastUpdated.getTime()) / 1000)) : null;
+  const label = seconds === null ? "Awaiting first update" : seconds < 5 ? "Updated just now" : seconds < 60 ? `Updated ${seconds}s ago` : `Updated ${Math.floor(seconds / 60)}m ago`;
+  return <span>{label}</span>;
 }
 
 function TimelineChart({ data, fillId, label }) {
@@ -127,12 +119,15 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
   const [modal, setModal] = useState(false), [ticker, setTicker] = useState(""), [notice, setNotice] = useState(""), [storage, setStorage] = useState("loading");
   const [savingTicker, setSavingTicker] = useState(false), [removingTicker, setRemovingTicker] = useState(""), [signingOut, setSigningOut] = useState(false);
   const [refreshing, setRefreshing] = useState(false), [lastUpdated, setLastUpdated] = useState(null);
-  const [online, setOnline] = useState(true), [clock, setClock] = useState(Date.now());
+  const [online, setOnline] = useState(true);
+  const [histories, setHistories] = useState({});
   const [theme, setTheme] = useState("light");
   const [movement, setMovement] = useState("all"), [assetClass, setAssetClass] = useState("all"), [sector, setSector] = useState("all"), [sortBy, setSortBy] = useState("viewedReturn"), [sortDirection, setSortDirection] = useState("desc");
   const noticeTimer = useRef(null);
   const refreshNowRef = useRef(null);
-  const viewedStocks = useMemo(() => stocks.map((stock) => ({ ...stock, assetType: stock.assetType === "ETF" ? "ETF" : "Equity", viewedReturn: periodReturn(stock, period) })), [stocks, period]);
+  const refreshHistoryRef = useRef(null);
+  const tickerKey = useMemo(() => stocks.map((stock) => stock.ticker).sort().join(","), [stocks]);
+  const viewedStocks = useMemo(() => stocks.map((stock) => ({ ...stock, assetType: stock.assetType === "ETF" ? "ETF" : "Equity", viewedReturn: periodReturn(stock, period), periodHistory: histories[stock.ticker] || [] })), [stocks, period, histories]);
   const sectors = useMemo(() => [...new Set(viewedStocks.map((stock) => stock.sector).filter(Boolean))].sort(), [viewedStocks]);
   const shown = useMemo(() => viewedStocks
     .filter((stock) => stock.ticker.toLowerCase().includes(query.toLowerCase()) || stock.name.toLowerCase().includes(query.toLowerCase()))
@@ -152,7 +147,7 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
   const focusedChart = useMemo(() => focusedStock ? chartData([focusedStock], period) : null, [focusedStock, period]);
   const advancing = performers.filter((stock) => stock.viewedReturn >= 0).length;
   const watchlistReturn = performers.length ? performers.reduce((sum, stock) => sum + stock.viewedReturn, 0) / performers.length : null;
-  const chart = useMemo(() => chartData(stocks, period), [stocks, period]);
+  const chart = useMemo(() => chartData(viewedStocks, period), [viewedStocks, period]);
   const breadth = performers.length ? Math.round(advancing / performers.length * 100) : 0;
   const heatmapStocks = useMemo(() => [...viewedStocks].sort((a, b) => {
     const weight = (stock) => stock.marketCap || (stock.price * stock.volume) || 0;
@@ -173,8 +168,6 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
   const marketText = !online || storage === "error" ? "Data offline" : storage === "loading" ? "Connecting" : marketSessions.length ? marketSessions.map(({ name, status }) => `${name} ${status}`).join(" · ") : "Data connected";
   const connectionTitle = `${marketText}${refreshing ? " · Refreshing" : ""}${lastUpdated ? ` · Updated ${new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" }).format(lastUpdated)}` : storage === "cached" ? " · Local cache" : ""}`;
   const marketStatusClass = marketSessions.some(({ status }) => status === "open") ? "session-open" : "session-closed";
-  const freshnessSeconds = lastUpdated ? Math.max(0, Math.floor((clock - lastUpdated.getTime()) / 1000)) : null;
-  const freshness = freshnessSeconds === null ? "Awaiting first update" : freshnessSeconds < 5 ? "Updated just now" : freshnessSeconds < 60 ? `Updated ${freshnessSeconds}s ago` : `Updated ${Math.floor(freshnessSeconds / 60)}m ago`;
 
   const notify = (message) => { window.clearTimeout(noticeTimer.current); setNotice(message); noticeTimer.current = window.setTimeout(() => setNotice(""), 2600); };
 
@@ -218,6 +211,7 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
         setStorage("connected");
         setLastUpdated(new Date(savedAt));
         cacheWatchlist(userKey, data);
+        refreshHistoryRef.current?.();
       } catch (error) {
         if (error.name !== "AbortError" || activeController?.signal.reason === "timeout") {
           setStorage(hasUsableData ? "cached" : "error");
@@ -247,17 +241,37 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
   }, [userKey]);
 
   useEffect(() => {
+    if (!tickerKey) { setHistories({}); return undefined; }
+    const controller = new AbortController();
+    setHistories({});
+    const refreshHistory = async () => {
+      try {
+        const response = await fetch(`/api/watchlist/history?period=${encodeURIComponent(period)}`, { signal: controller.signal, cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error);
+        setHistories(Object.fromEntries(data.map((item) => [item.ticker, item.history])));
+      } catch (error) {
+        if (error.name !== "AbortError") notify(error.message || "Price history is unavailable");
+      }
+    };
+    refreshHistoryRef.current = refreshHistory;
+    refreshHistory();
+    return () => {
+      controller.abort();
+      if (refreshHistoryRef.current === refreshHistory) refreshHistoryRef.current = null;
+    };
+  }, [period, tickerKey]);
+
+  useEffect(() => {
     const updateConnection = () => {
       const isOnline = navigator.onLine;
       setOnline(isOnline);
       if (isOnline) refreshNowRef.current?.();
     };
-    const clockId = window.setInterval(() => setClock(Date.now()), 1_000);
     updateConnection();
     window.addEventListener("online", updateConnection);
     window.addEventListener("offline", updateConnection);
     return () => {
-      window.clearInterval(clockId);
       window.removeEventListener("online", updateConnection);
       window.removeEventListener("offline", updateConnection);
     };
@@ -311,9 +325,21 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
     try { window.localStorage.setItem("aperture:theme", next); } catch {}
   }
 
-  function exportWatchlist() {
+  async function exportWatchlist() {
     if (!stocks.length) { notify("Add a ticker before exporting"); return; }
     const exportedAt = new Date().toISOString();
+    let exportedHistories;
+    try {
+      const entries = await Promise.all(Object.keys(periodBars).map(async (timeframe) => {
+        const response = await fetch(`/api/watchlist/history?period=${encodeURIComponent(timeframe)}`, { cache: "no-store" });
+        if (!response.ok) throw new Error();
+        return [timeframe, await response.json()];
+      }));
+      exportedHistories = Object.fromEntries(entries);
+    } catch {
+      notify("Could not prepare the export");
+      return;
+    }
     const records = stocks.map((stock) => ({
       schema: "aperture.watchlist.ticker.v1",
       exportedAt,
@@ -330,10 +356,7 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
         returnsPercent: Object.fromEntries(Object.keys(periodBars).map((timeframe) => [timeframe, periodReturn(stock, timeframe)])),
       },
       history: {
-        intraday5Minute: stock.intradayHistory || [],
-        hourly6Month: stock.hourlyHistory || [],
-        daily3Year: stock.history || [],
-        monthlyMax: stock.maxHistory || [],
+        periods: Object.fromEntries(Object.entries(exportedHistories).map(([timeframe, items]) => [timeframe, items.find((item) => item.ticker === stock.ticker)?.history || []])),
       },
     }));
     const contents = records.map((record) => JSON.stringify(record)).join("\n");
@@ -379,7 +402,7 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
 
     <main id="top">
       {view === "overview" ? <section className="hero"><div className="hero-copy"><p className="kicker">Aperture / Market overview</p><h1>See the whole<br/>market picture.</h1><p className="hero-sub">A focused view of the companies that matter to you—performance, momentum, and signal in one frame.</p></div><div className="hero-meta"><span>{String(stocks.length).padStart(2, "0")}</span><p>Companies in focus<br/><b>{advancing} advancing today</b></p></div></section> : <section className="page-masthead"><p className="kicker">Aperture / {pageDetails[view][0]}</p><h1>{pageDetails[view][1]}</h1><p>{stocks.length} tracked positions · {advancing} advancing</p></section>}
-      <section className="control-row" aria-label="Dashboard controls"><div className="periods"><span>Timeframe</span>{Object.keys(periodBars).map((value) => <button key={value} className={period === value ? "active" : ""} onClick={() => setPeriod(value)}>{value}</button>)}</div><div className="live-controls"><span>{freshness}</span><i>·</i><span>{periodResolution[period]} resolution</span><button type="button" disabled={refreshing || !online} onClick={() => refreshNowRef.current?.()} aria-label={refreshing ? "Refreshing market data" : "Refresh market data now"}>{refreshing ? <span className="button-spinner dark" aria-hidden="true"/> : "↻"} Refresh</button></div></section>
+      <section className="control-row" aria-label="Dashboard controls"><div className="periods"><span>Timeframe</span>{Object.keys(periodBars).map((value) => <button key={value} className={period === value ? "active" : ""} onClick={() => setPeriod(value)}>{value}</button>)}</div><div className="live-controls"><Freshness lastUpdated={lastUpdated}/><i>·</i><span>{periodResolution[period]} resolution</span><button type="button" disabled={refreshing || !online} onClick={() => { refreshNowRef.current?.(); refreshHistoryRef.current?.(); }} aria-label={refreshing ? "Refreshing market data" : "Refresh market data now"}>{refreshing ? <span className="button-spinner dark" aria-hidden="true"/> : "↻"} Refresh</button></div></section>
       {storage !== "loading" && view === "overview" && <section className="overview-grid">
         <article className="performance-panel"><div className="panel-top"><div><p className="label">Aggregate performance</p><h2 className={tone(watchlistReturn)}>{percent(watchlistReturn)}</h2><p>Across your Aperture watchlist · {period}</p></div><span className={`trend-badge ${tone(chart?.current)}`}><ArrowIcon /> {percent(chart?.current)}</span></div><div className="chart-wrap"><div className="chart-grid"><span>High</span><span>Avg</span><span>Low</span></div>{chart ? <TimelineChart data={chart} fillId="chartFill" label={`Watchlist performance over ${period}`}/> : <div className="chart-empty">Market history will appear here</div>}<div className="chart-axis"><span>Open</span><span>Midpoint</span><span>Latest</span></div></div></article>
         <aside className="stats-panel"><article><p className="label">Market breadth</p><div className="stat-line"><strong>{breadth}%</strong><span className="positive">{advancing} of {performers.length}</span></div><div className="breadth-bar"><i style={{ width: `${breadth}%` }}/></div><p>of tracked names are advancing</p></article><article><p className="label">Leading position</p>{performers[0] ? <Link className="leader ticker-link" href={`/focus?ticker=${encodeURIComponent(performers[0].ticker)}`}><span className="monogram">{performers[0].ticker.slice(0, 2)}</span><div><strong>{performers[0].ticker}</strong><p>{performers[0].name}</p></div><b className={tone(performers[0].viewedReturn)}>{percent(performers[0].viewedReturn)}</b></Link> : <div className="leader"><span className="monogram">—</span><div><strong>No data</strong><p>Awaiting market feed</p></div><b>—</b></div>}</article><article><p className="label">Aperture signal</p><div className="signal-summary"><strong>{Math.round(performers.reduce((sum, stock) => sum + (stock.signal || 0), 0) / (performers.length || 1))}</strong><span>/ 100<br/><b>Aggregate momentum</b></span></div></article></aside>

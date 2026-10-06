@@ -5,18 +5,12 @@ import { getRequestUser } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
-async function prepareWatchlist(collection) {
-  await collection.dropIndex("ticker_1").catch((error) => { if (error?.code !== 27 && error?.codeName !== "IndexNotFound") throw error; });
-  await collection.createIndex({ userId: 1, ticker: 1 }, { unique: true });
-}
-
 export async function GET(request) {
   try {
     const user = await getRequestUser(request);
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const db = await getDatabase();
     const collection = db.collection("watchlist");
-    await prepareWatchlist(collection);
     const stocks = await collection.find({ userId: user._id }, { projection: { ticker: 1, name: 1, sector: 1 } }).sort({ order: 1, createdAt: 1 }).toArray();
     return NextResponse.json(await hydrateStocks(stocks, db));
   } catch (error) {
@@ -36,7 +30,6 @@ export async function POST(request) {
     }
     const db = await getDatabase();
     const collection = db.collection("watchlist");
-    await prepareWatchlist(collection);
     const existing = await collection.findOne({ userId: user._id, ticker });
     if (existing) return NextResponse.json({ error: `${ticker} is already tracked.` }, { status: 409 });
     const [stock] = await hydrateStocks([{ ticker }], db);
