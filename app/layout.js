@@ -3,6 +3,8 @@ import "./heatmap.css";
 import "./auth.css";
 import "./loaders.css";
 import "./theme.css";
+import "./motion.css";
+import MotionController from "./motion-controller";
 
 export const metadata = {
   title: "Aperture — Market Intelligence",
@@ -11,5 +13,5 @@ export const metadata = {
 
 export default function RootLayout({ children }) {
   const themeScript = `(function(){try{var t=localStorage.getItem('aperture:theme');if(!t)t=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.dataset.theme=t;document.documentElement.style.colorScheme=t}catch(e){}})()`;
-  return <html lang="en" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: themeScript }}/></head><body>{children}</body></html>;
+  return <html lang="en" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: themeScript }}/></head><body><MotionController />{children}</body></html>;
 }

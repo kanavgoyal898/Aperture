@@ -117,11 +117,13 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
   const [stocks, setStocks] = useState([]), [query, setQuery] = useState(""), [period, setPeriod] = useState("1D");
   const [focusedTicker, setFocusedTicker] = useState(initialTicker);
   const [modal, setModal] = useState(false), [ticker, setTicker] = useState(""), [notice, setNotice] = useState(""), [storage, setStorage] = useState("loading");
+  const [tickerPreview, setTickerPreview] = useState({ status: "idle" });
   const [savingTicker, setSavingTicker] = useState(false), [signingOut, setSigningOut] = useState(false);
   const [refreshing, setRefreshing] = useState(false), [lastUpdated, setLastUpdated] = useState(null);
   const [online, setOnline] = useState(true);
   const [histories, setHistories] = useState({});
   const [theme, setTheme] = useState("light");
+  const [expandedHeatmaps, setExpandedHeatmaps] = useState({ equities: true });
   const [movement, setMovement] = useState("all"), [assetClass, setAssetClass] = useState("all"), [sector, setSector] = useState("all"), [sortBy, setSortBy] = useState("viewedReturn"), [sortDirection, setSortDirection] = useState("desc");
   const noticeTimer = useRef(null);
   const refreshNowRef = useRef(null);
@@ -155,7 +157,6 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
     return weight(b) - weight(a) || a.ticker.localeCompare(b.ticker);
   }), [viewedStocks]);
   const equityHeatmapStocks = useMemo(() => heatmapStocks.filter((stock) => stock.assetType === "Equity"), [heatmapStocks]);
-  const etfHeatmapStocks = useMemo(() => heatmapStocks.filter((stock) => stock.assetType === "ETF"), [heatmapStocks]);
   const marketSessions = useMemo(() => {
     const markets = new Map();
     stocks.forEach((stock) => {
@@ -171,6 +172,7 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
   const marketStatusClass = marketSessions.some(({ status }) => status === "open") ? "session-open" : "session-closed";
 
   const notify = (message) => { window.clearTimeout(noticeTimer.current); setNotice(message); noticeTimer.current = window.setTimeout(() => setNotice(""), 2600); };
+  const toggleHeatmap = (key) => setExpandedHeatmaps((current) => ({ ...current, [key]: !current[key] }));
 
   useEffect(() => {
     setTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light");
@@ -289,11 +291,50 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
     return () => window.removeEventListener("keydown", close);
   }, [modal, savingTicker]);
 
+  useEffect(() => {
+    if (!modal) {
+      setTickerPreview({ status: "idle" });
+      return undefined;
+    }
+    const clean = ticker.trim().toUpperCase();
+    if (!clean) {
+      setTickerPreview({ status: "idle" });
+      return undefined;
+    }
+    if (!/^[A-Z0-9.^=-]{1,12}$/.test(clean)) {
+      setTickerPreview({ status: "error", message: "Enter a valid Yahoo Finance ticker." });
+      return undefined;
+    }
+    if (stocks.some((stock) => stock.ticker === clean)) {
+      setTickerPreview({ status: "error", message: `${clean} is already in your watchlist.` });
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    setTickerPreview({ status: "loading", ticker: clean });
+    const lookupTimer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/market-data/lookup?ticker=${encodeURIComponent(clean)}`, { signal: controller.signal, cache: "no-store" });
+        const data = await response.json();
+        if (response.status === 401) { window.location.replace("/login"); return; }
+        if (!response.ok) throw new Error(data.error);
+        setTickerPreview({ status: "success", ...data });
+      } catch (error) {
+        if (error.name !== "AbortError") setTickerPreview({ status: "error", message: error.message || "Could not identify this ticker." });
+      }
+    }, 350);
+    return () => {
+      window.clearTimeout(lookupTimer);
+      controller.abort();
+    };
+  }, [modal, ticker, stocks]);
+
   async function addTicker(event) {
     event.preventDefault();
     if (savingTicker) return;
     const clean = ticker.trim().toUpperCase();
     if (stocks.some((stock) => stock.ticker === clean)) { notify(`${clean} is already tracked`); return; }
+    if (tickerPreview.status !== "success" || tickerPreview.ticker !== clean) return;
     const optimisticStock = {
       ticker: clean,
       name: `${clean} · Adding…`,
@@ -430,7 +471,7 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
   }
 
   const sortLabel = (column) => sortBy === column ? (sortDirection === "asc" ? "↑" : "↓") : "↕";
-  const stockRow = (stock) => <tr className={`stock-row ${stock._optimistic ? "optimistic" : ""}`} key={stock.ticker}><td><Link className="company-cell company-link" href={`/focus?ticker=${encodeURIComponent(stock.ticker)}`} aria-disabled={stock._optimistic} tabIndex={stock._optimistic ? -1 : undefined} onClick={(event) => { if (stock._optimistic) event.preventDefault(); }}><span className="monogram">{stock.ticker.slice(0, 2)}</span><div><b>{stock.ticker}</b><small>{stock.name}</small></div></Link></td><td data-label="Last price">{money(stock.price)}</td><td data-label="Today"><span className={`return ${tone(stock.day)}`}>{percent(stock.day)}</span></td><td data-label={`${period} return`}><span className={`return ${tone(stock.viewedReturn)}`}>{percent(stock.viewedReturn)}</span></td><td data-label="52 week range"><div className="range"><i style={{ left: `${stock.range || 0}%` }}/></div></td><td data-label="Signal"><span className="signal-value">{Number.isFinite(stock.signal) ? stock.signal : "—"}</span><small className="of-100"> / 100</small></td><td className="row-action"><button className="remove" disabled={stock._optimistic} aria-label={stock._optimistic ? `Adding ${stock.ticker}` : `Remove ${stock.ticker} from Aperture`} onClick={() => removeTicker(stock.ticker)}>{stock._optimistic ? <span className="button-spinner dark" aria-hidden="true"/> : "×"}</button></td></tr>;
+  const stockRow = (stock) => <tr className={`stock-row ${stock._optimistic ? "optimistic" : ""}`} key={stock.ticker}><td><Link className="company-cell company-link" href={`/focus?ticker=${encodeURIComponent(stock.ticker)}`} aria-disabled={stock._optimistic} tabIndex={stock._optimistic ? -1 : undefined} onClick={(event) => { if (stock._optimistic) event.preventDefault(); }}><span className="monogram">{stock.ticker.slice(0, 2)}</span><div><b>{stock.ticker}</b><small>{stock.name}</small></div></Link></td><td data-label="Sector">{stock.sector || "—"}</td><td data-label="Last price">{money(stock.price)}</td><td data-label="Today"><span className={`return ${tone(stock.day)}`}>{percent(stock.day)}</span></td><td data-label={`${period} return`}><span className={`return ${tone(stock.viewedReturn)}`}>{percent(stock.viewedReturn)}</span></td><td data-label="52 week range"><div className="range"><i style={{ left: `${stock.range || 0}%` }}/></div></td><td data-label="Signal"><span className="signal-value">{Number.isFinite(stock.signal) ? stock.signal : "—"}</span><small className="of-100"> / 100</small></td><td className="row-action"><button className="remove" disabled={stock._optimistic} aria-label={stock._optimistic ? `Adding ${stock.ticker}` : `Remove ${stock.ticker} from Aperture`} onClick={() => removeTicker(stock.ticker)}>{stock._optimistic ? <span className="button-spinner dark" aria-hidden="true"/> : "×"}</button></td></tr>;
 
   return <div className="shell">
     <header className="site-header">
@@ -464,10 +505,9 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
       {storage !== "loading" && view === "heatmap" && <section className="heatmap-section route-section">
         <div className="section-title heatmap-title"><div><p className="kicker">Market field</p><h2>Performance field</h2></div><div className="heat-legend" aria-label="Continuous heat map scale"><span>Decline</span><i/><span>Advance</span></div></div>
         <div className="heatmap-groups">
-          <section className="heatmap-group" aria-labelledby="equity-map-title"><header><div><span>01</span><h3 id="equity-map-title">Equities</h3></div><small>{equityHeatmapStocks.length} ticker{equityHeatmapStocks.length === 1 ? "" : "s"}</small></header>{equityHeatmapStocks.length ? <PerformanceTreemap stocks={equityHeatmapStocks} period={period} theme={theme} groupLabel="equity"/> : <div className="heatmap-empty compact"><span>◉</span><p>Add an equity to build this market field.</p></div>}</section>
-          <section className="heatmap-group" aria-labelledby="etf-map-title"><header><div><span>02</span><h3 id="etf-map-title">Exchange-traded funds</h3></div><small>{etfHeatmapStocks.length} ticker{etfHeatmapStocks.length === 1 ? "" : "s"}</small></header>{etfHeatmapStocks.length ? <PerformanceTreemap stocks={etfHeatmapStocks} period={period} theme={theme} groupLabel="ETF"/> : <div className="heatmap-empty compact"><span>◉</span><p>Add an ETF to build this market field.</p></div>}</section>
+          <section className={`heatmap-group equity-heatmap-group ${expandedHeatmaps.equities ? "" : "collapsed"}`} aria-labelledby="equity-map-title"><header><div className="heatmap-group-heading"><span>01</span><div><h3 id="equity-map-title">Company landscape</h3><p>Every equity, sized by market weight</p></div></div><button className="heatmap-toggle" type="button" aria-expanded={expandedHeatmaps.equities} aria-controls="equity-map-content" onClick={() => toggleHeatmap("equities")}><small>{expandedHeatmaps.equities ? "Hide" : "Show"} · {equityHeatmapStocks.length}</small></button></header><div id="equity-map-content" className="heatmap-content" aria-hidden={!expandedHeatmaps.equities}><div>{equityHeatmapStocks.length ? <PerformanceTreemap stocks={equityHeatmapStocks} period={period} theme={theme} groupLabel="equity"/> : <div className="heatmap-empty compact"><span>◉</span><p>Add an equity to build this market field.</p></div>}</div></div></section>
         </div>
-        <p className="heatmap-note">{viewedStocks.length} watchlist tickers · Color reflects {period} movement · Size reflects market weight within each asset class</p>
+        <p className="heatmap-note">{equityHeatmapStocks.length} equities · Color reflects {period} movement · Size reflects market weight</p>
       </section>}
 
       {storage !== "loading" && view === "focus" && <section className="focus-section route-section">
@@ -488,18 +528,19 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
         </div>
         <div className="table-wrap"><table><thead><tr>
           <th><button className={sortBy === "company" ? "active" : ""} onClick={() => sortTable("company")}>Company <span>{sortLabel("company")}</span></button></th>
+          <th><button className={sortBy === "sector" ? "active" : ""} onClick={() => sortTable("sector")}>Sector <span>{sortLabel("sector")}</span></button></th>
           <th><button className={sortBy === "price" ? "active" : ""} onClick={() => sortTable("price")}>Last price <span>{sortLabel("price")}</span></button></th>
           <th><button className={sortBy === "day" ? "active" : ""} onClick={() => sortTable("day")}>Today <span>{sortLabel("day")}</span></button></th>
           <th><button className={sortBy === "viewedReturn" ? "active" : ""} onClick={() => sortTable("viewedReturn")}>{period} return <span>{sortLabel("viewedReturn")}</span></button></th>
           <th><button className={sortBy === "range" ? "active" : ""} onClick={() => sortTable("range")}>52 week range <span>{sortLabel("range")}</span></button></th>
           <th><button className={sortBy === "signal" ? "active" : ""} onClick={() => sortTable("signal")}>Signal <span>{sortLabel("signal")}</span></button></th>
           <th><span className="sr-only">Actions</span></th>
-        </tr></thead>{[["Equity", "Equities"], ["ETF", "Exchange-traded funds"]].map(([type, label]) => { const group = shown.filter((stock) => stock.assetType === type); return group.length > 0 && <tbody key={type}><tr className="asset-group-row"><td colSpan="7"><span>{label}</span><b>{group.length}</b></td></tr>{group.map(stockRow)}</tbody>; })}</table>{shown.length === 0 && <div className="empty-state"><strong>No positions found</strong><p>Adjust your search or filters to see more of your watchlist.</p><button onClick={() => { setQuery(""); setMovement("all"); setAssetClass("all"); setSector("all"); }}>Clear filters</button></div>}</div>
+        </tr></thead>{[["Equity", "Equities"], ["ETF", "Exchange-traded funds"]].map(([type, label]) => { const group = shown.filter((stock) => stock.assetType === type); return group.length > 0 && <tbody key={type}><tr className="asset-group-row"><td colSpan="8"><span>{label}</span><b>{group.length}</b></td></tr>{group.map(stockRow)}</tbody>; })}</table>{shown.length === 0 && <div className="empty-state"><strong>No positions found</strong><p>Adjust your search or filters to see more of your watchlist.</p><button onClick={() => { setQuery(""); setMovement("all"); setAssetClass("all"); setSector("all"); }}>Clear filters</button></div>}</div>
       </section>}
     </main>
 
     <footer><div className="brand footer-brand"><span className="brand-mark"><ApertureMark /></span><span>Aperture</span></div><p>Clarity for considered investors.</p><span>Market data via Yahoo Finance · Informational only</span></footer>
-    {modal && <div className="modal" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !savingTicker) setModal(false); }}><form className="dialog" onSubmit={addTicker} role="dialog" aria-modal="true" aria-labelledby="dialog-title" aria-busy={savingTicker}><button className="dialog-close" type="button" disabled={savingTicker} onClick={() => setModal(false)} aria-label="Close">×</button><span className="dialog-mark"><ApertureMark /></span><p className="kicker">Expand your view</p><h2 id="dialog-title">Add to Aperture</h2><p>Enter a market ticker to bring the company into your watchlist.</p><label>Ticker symbol<input autoFocus value={ticker} disabled={savingTicker} onChange={(event) => setTicker(event.target.value.toUpperCase())} maxLength="12" placeholder="e.g. AAPL" required/></label><div className="dialog-actions"><button className="secondary-button" type="button" disabled={savingTicker} onClick={() => setModal(false)}>Cancel</button><button className="primary-button" disabled={savingTicker} type="submit">{savingTicker && <span className="button-spinner" aria-hidden="true"/>}{savingTicker ? "Adding…" : "Add position"}</button></div></form></div>}
+    {modal && <div className="modal" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !savingTicker) setModal(false); }}><form className="dialog" onSubmit={addTicker} role="dialog" aria-modal="true" aria-labelledby="dialog-title" aria-busy={savingTicker}><button className="dialog-close" type="button" disabled={savingTicker} onClick={() => setModal(false)} aria-label="Close">×</button><span className="dialog-mark"><ApertureMark /></span><p className="kicker">Expand your view</p><h2 id="dialog-title">Add to Aperture</h2><p>Enter a market ticker to bring the company into your watchlist.</p><label>Ticker symbol<input autoFocus value={ticker} disabled={savingTicker} onChange={(event) => setTicker(event.target.value.toUpperCase())} maxLength="12" placeholder="e.g. AAPL" required aria-describedby="ticker-preview"/></label><div id="ticker-preview" className={`ticker-preview ${tickerPreview.status}`} aria-live="polite">{tickerPreview.status === "loading" && <><span className="button-spinner dark" aria-hidden="true"/><p>Looking up {tickerPreview.ticker}…</p></>}{tickerPreview.status === "success" && <><span className="ticker-preview-mark">{tickerPreview.ticker.slice(0, 2)}</span><div><strong>{tickerPreview.name}</strong><small>{tickerPreview.ticker} · {tickerPreview.assetType}{tickerPreview.exchange ? ` · ${tickerPreview.exchange}` : ""}</small></div><i aria-label="Ticker found">✓</i></>}{tickerPreview.status === "error" && <p>{tickerPreview.message}</p>}</div><div className="dialog-actions"><button className="secondary-button" type="button" disabled={savingTicker} onClick={() => setModal(false)}>Cancel</button><button className="primary-button" disabled={savingTicker || tickerPreview.status !== "success"} type="submit">{savingTicker && <span className="button-spinner" aria-hidden="true"/>}{savingTicker ? "Adding…" : "Add position"}</button></div></form></div>}
     <div className={`toast ${notice ? "show" : ""}`} role="status">{notice}</div>
   </div>;
 }

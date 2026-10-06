@@ -9,6 +9,11 @@ footer {
 }
 
 .periods button.active { background: var(--ink); color: var(--paper); }
+.control-row { min-height: 68px; gap: 24px; padding: 10px 0; }
+.periods { max-width: 100%; flex-wrap: nowrap; row-gap: 0; padding: 0; }
+.periods > span { flex: 0 0 auto; margin-right: 12px; }
+.stats-panel article { padding: 30px 30px 27px; }
+.focus-metrics article { padding: 24px 28px 22px; }
 .leader p,
 .company-cell small { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; line-height: 1.45; }
 .company-cell { align-items: start; }
@@ -35,6 +40,20 @@ footer {
 .add-position-button strong { font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
 .add-position-button:hover { transform: translateY(-1px); box-shadow: 0 7px 18px rgba(23,25,22,.13); }
 .add-position-button:active { transform: none; }
+
+.ticker-preview { min-height: 58px; display: flex; align-items: center; gap: 11px; margin-top: 13px; padding: 10px 12px; border: 1px solid transparent; border-radius: 3px; color: var(--muted); }
+.ticker-preview:empty { min-height: 0; margin: 0; padding: 0; }
+.ticker-preview.loading { border-color: var(--line); background: var(--surface); }
+.ticker-preview.success { border-color: color-mix(in srgb,var(--green) 35%,var(--line)); background: color-mix(in srgb,var(--green-soft) 58%,transparent); }
+.ticker-preview.error { min-height: 36px; padding: 8px 0; color: var(--red); }
+.ticker-preview p { margin: 0; font-size: 10px; line-height: 1.45; }
+.ticker-preview-mark { width: 36px; height: 36px; flex: 0 0 36px; display: grid; place-items: center; border-radius: 50%; background: var(--green-soft); color: var(--green); font-family: var(--mono); font-size: 9px; font-weight: 600; }
+.ticker-preview div { min-width: 0; flex: 1; }
+.ticker-preview strong, .ticker-preview small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ticker-preview strong { color: var(--ink); font-family: var(--sans); font-size: 12px; text-transform: none; letter-spacing: 0; }
+.ticker-preview small { margin-top: 4px; color: var(--muted); font-family: var(--mono); font-size: 8px; letter-spacing: .04em; }
+.ticker-preview > i { color: var(--green); font-size: 14px; font-style: normal; }
+.dialog .primary-button:disabled { cursor: default; opacity: .42; transform: none; }
 
 .account-menu { position: relative; }
 .account-menu summary { min-height: 40px; display: flex; align-items: center; gap: 8px; padding: 3px 9px 3px 3px; border: 1px solid transparent; border-radius: 999px; cursor: pointer; list-style: none; transition: background .2s ease, border-color .2s ease; }
@@ -129,6 +148,10 @@ html[data-theme="dark"] .hover-point { fill: var(--paper); }
 html[data-theme="dark"] .chart-tooltip { border: 1px solid var(--line); background: var(--surface); color: var(--ink); box-shadow: 0 10px 32px rgba(0,0,0,.38); }
 html[data-theme="dark"] .chart-tooltip::after { bottom: -6px; background: var(--surface); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 html[data-theme="dark"] .chart-tooltip span { color: var(--muted); }
+@media (max-width: 1000px) {
+  .stats-panel article { padding: 25px 22px; }
+  .focus-metrics article { padding: 22px 18px; }
+}
 @media (max-width: 1300px) {
   .account-identity > div { max-width: 105px; }
   .account-identity small { display: none; }
@@ -158,6 +181,12 @@ html[data-theme="dark"] .chart-tooltip span { color: var(--muted); }
   .add-position-button { height: 38px; padding-right: 12px; }
   .add-position-button > span { width: 28px; height: 28px; }
   .header-actions { gap: 7px; }
+  .control-row { min-height: 0; gap: 12px; padding: 14px 0; }
+  .periods { width: 100%; flex-wrap: wrap; row-gap: 6px; }
+  .periods > span { flex: 0 0 100%; margin: 0 0 2px; }
+  .periods button { width: 38px; height: 38px; flex: 0 0 38px; }
+  .stats-panel article { padding: 24px 0; }
+  .focus-metrics article { padding: 20px 14px; }
 }
 
 @media (max-width: 430px) {

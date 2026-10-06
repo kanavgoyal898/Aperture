@@ -33,28 +33,37 @@ export default function PerformanceTreemap({ stocks, period, theme, groupLabel =
   useEffect(() => {
     if (!elementRef.current) return undefined;
     const dark = theme === "dark";
+    const chartWidth = elementRef.current.clientWidth;
+    const nameFontSize = chartWidth < 760 ? 14 : chartWidth < 1100 ? 17 : 20;
     const extent = Math.max(1, ...stocks.map((stock) => Math.abs(stock.viewedReturn || 0)));
     const chart = echarts.init(elementRef.current, null, { renderer: "canvas" });
-    const weights = stocks.map((stock) => stock.marketCap || (stock.price * stock.volume) || 1).filter((value) => value > 0);
+    const weights = stocks.map((stock) => stock.marketWeight || stock.marketCap || (stock.price * stock.volume) || 1).filter((value) => value > 0);
     const weightFloor = Math.min(...weights.map(Math.log10));
     const weightCeiling = Math.max(...weights.map(Math.log10));
     const weightSpread = weightCeiling - weightFloor || 1;
-    const data = stocks.map((stock) => {
-      const marketWeight = stock.marketCap || (stock.price * stock.volume) || 1;
+    const stockDatum = (stock, id = stock.ticker) => {
+      const marketWeight = stock.marketWeight || stock.marketCap || (stock.price * stock.volume) || 1;
       const visual = tileVisual(stock.viewedReturn, extent, dark);
+      const tickerFontSize = Math.min(nameFontSize, Math.max(10, Math.floor((nameFontSize * 5.5) / Math.max(stock.ticker.length, 1))));
       return {
-        id: stock.ticker,
+        id,
         name: stock.ticker,
         value: 1 + 1.25 * Math.max(0, Math.log10(Math.max(marketWeight, 1)) - weightFloor) / weightSpread,
         itemStyle: { color: visual.color },
-        label: { color: visual.text },
+        label: { color: visual.text, rich: { name: { fontSize: tickerFontSize } } },
         emphasis: { itemStyle: { color: visual.color } },
         meta: stock,
       };
-    });
+    };
+    const data = stocks.map((stock) => stockDatum(stock));
 
     chart.setOption({
-      animationDurationUpdate: 650,
+      animation: true,
+      animationDuration: 900,
+      animationDelay: (index) => Math.min(index * 24, 240),
+      animationEasing: "cubicOut",
+      animationDurationUpdate: 550,
+      animationDelayUpdate: 0,
       animationEasingUpdate: "cubicOut",
       tooltip: {
         confine: true,
@@ -79,31 +88,46 @@ export default function PerformanceTreemap({ stocks, period, theme, groupLabel =
         sort: "desc",
         visibleMin: 0,
         childrenVisibleMin: 0,
-        animationDuration: 700,
+        animationDuration: 650,
         data,
         label: {
           show: true,
           position: "inside",
           align: "center",
           verticalAlign: "middle",
-          padding: 6,
-          formatter: ({ data: item }) => item?.meta?.ticker ? item.name : "",
+          padding: chartWidth < 480 ? 2 : 6,
+          formatter: ({ data: item }) => {
+            const meta = item?.meta;
+            if (!meta?.ticker) return "";
+            return `{name|${meta.ticker}}\n{return|${percent(meta.viewedReturn)}}`;
+          },
           fontFamily: "Newsreader, serif",
           fontSize: 22,
           fontWeight: 500,
+          lineHeight: 25,
+          overflow: "none",
+          rich: {
+            name: { fontFamily: "Newsreader, serif", fontSize: nameFontSize, fontWeight: 500, lineHeight: nameFontSize + 5 },
+            return: { fontFamily: "DM Mono, monospace", fontSize: 10, fontWeight: 500, lineHeight: 18 },
+            detail: { fontFamily: "DM Mono, monospace", fontSize: 8, fontWeight: 400, lineHeight: 14, opacity: .72 },
+          },
         },
-        labelLayout: ({ rect }) => {
-          const shortestSide = Math.min(rect.width, rect.height);
-          const fontSize = shortestSide < 42 ? 10 : shortestSide < 64 ? 12 : shortestSide < 96 ? 15 : shortestSide < 150 ? 19 : 25;
-          return { width: Math.max(12, rect.width - 14), height: Math.max(12, rect.height - 14), fontSize, hideOverlap: false };
+        labelLayout: {
+          height: nameFontSize + 25,
+          align: "center",
+          verticalAlign: "middle",
+          hideOverlap: false,
         },
         upperLabel: { show: false },
         itemStyle: { borderColor: dark ? "#11130f" : "#f2f0e9", borderWidth: 3, gapWidth: 3, borderRadius: 0 },
-        emphasis: { focus: "none", scale: false, itemStyle: { borderColor: dark ? "#f0efe8" : "#171916", borderWidth: 2, shadowBlur: 0 }, label: { show: true } },
+        emphasis: { focus: "none", scale: false, itemStyle: { borderColor: dark ? "#f0efe8" : "#171916", borderWidth: 2, shadowBlur: 18, shadowColor: dark ? "rgba(0,0,0,.45)" : "rgba(23,25,22,.2)" }, label: { show: true } },
       }],
     });
 
-    const openTicker = ({ data: item }) => { if (item?.meta?.ticker) router.push(`/focus?ticker=${encodeURIComponent(item.meta.ticker)}`); };
+    const openTicker = (params) => {
+      const item = params.data;
+      if (item?.meta?.ticker) router.push(`/focus?ticker=${encodeURIComponent(item.meta.ticker)}`);
+    };
     chart.on("click", openTicker);
     const observer = new ResizeObserver(() => chart.resize());
     observer.observe(elementRef.current);

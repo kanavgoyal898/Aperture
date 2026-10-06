@@ -1,0 +1,134 @@
+:root {
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  --ease-spring: cubic-bezier(.2, .9, .25, 1.12);
+  --motion-fast: 180ms;
+  --motion-medium: 420ms;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  z-index: 100;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  pointer-events: none;
+  opacity: 0;
+  transform: scaleX(0);
+  transform-origin: left;
+  background: var(--green);
+}
+body:not(.route-arrived)::before { animation: route-progress .5s var(--ease-out); }
+
+.motion-ready [data-motion-state="pending"] {
+  opacity: 0;
+  transform: translateY(18px);
+}
+.motion-ready [data-motion-state="visible"] {
+  opacity: 1;
+  transform: none;
+  transition: opacity .65s var(--ease-out), transform .65s var(--ease-out);
+  transition-delay: calc(var(--motion-order, 0) * 45ms);
+}
+
+.brand-mark { transition: transform .5s var(--ease-spring); }
+.brand:hover .brand-mark { transform: rotate(90deg) scale(1.06); }
+.brand-mark svg circle:first-child { transform-origin: center; transition: transform .5s var(--ease-out); }
+.brand:hover .brand-mark svg circle:first-child { transform: scale(.88); }
+
+button, a, summary, input, select { transition-timing-function: var(--ease-out) !important; }
+button:not(:disabled), summary, a { position: relative; }
+button:not(:disabled)::after, summary::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(circle at var(--pointer-x,50%) var(--pointer-y,50%), currentColor 0, transparent 52%);
+  transition: opacity var(--motion-fast) ease;
+}
+button:not(:disabled):active::after, summary:active::after { opacity: .1; transition-duration: 0s; }
+button:not(:disabled):active { transform: translateY(1px) scale(.98); }
+
+.primary-button, .add-position-button, .auth-submit { overflow: hidden; }
+.primary-button::before, .add-position-button::before, .auth-submit::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 25%, rgba(255,255,255,.18) 48%, transparent 72%);
+  transform: translateX(-130%);
+  transition: transform .65s var(--ease-out);
+}
+.primary-button:hover::before, .add-position-button:hover::before, .auth-submit:hover::before { transform: translateX(130%); }
+
+.periods button, .movement-filters button, .asset-filters button { transition: color var(--motion-fast), background var(--motion-fast), transform var(--motion-fast) !important; }
+.periods button:hover, .movement-filters button:hover, .asset-filters button:hover { transform: translateY(-2px); }
+.periods button.active, .movement-filters button.active, .asset-filters button.active { animation: control-select .35s var(--ease-spring); }
+
+.position-card, .heatmap-group, .focus-workspace, .table-wrap {
+  transition: transform .35s var(--ease-out), box-shadow .35s var(--ease-out), background-color .3s ease, border-color .3s ease;
+}
+.position-card { transform-origin: center bottom; }
+.position-card:hover { box-shadow: 0 16px 34px rgba(23,25,22,.07); }
+.monogram, .focus-monogram, .account-avatar { transition: transform .32s var(--ease-spring), background-color .3s ease; }
+.leader:hover .monogram, .company-link:hover .monogram, .focus-identity:hover .focus-monogram, .account-menu:hover .account-avatar { transform: scale(1.08) rotate(-4deg); }
+
+.stats-panel article, tbody tr { position: relative; }
+.stats-panel article::after, tbody tr::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 100%;
+  height: 1px;
+  background: var(--ink);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform .35s var(--ease-out);
+  pointer-events: none;
+}
+.stats-panel article:hover::after, tbody tr:hover::after { transform: scaleX(1); }
+.breadth-bar { overflow: hidden; }
+.breadth-bar i { transform-origin: left; animation: bar-grow .8s var(--ease-out) both; }
+.range i { transition: left .55s var(--ease-out), transform var(--motion-fast); }
+tbody tr:hover .range i { transform: translate(-50%,-50%) scale(1.45); }
+
+.search svg { transition: transform .25s var(--ease-spring), stroke .2s; }
+.search:focus-within svg { transform: translateY(-50%) scale(1.12) rotate(-8deg); stroke: var(--ink); }
+.search input:focus { box-shadow: 0 0 0 4px color-mix(in srgb,var(--ink) 7%,transparent); }
+.dialog-close, .remove { transform-origin: center; }
+.dialog-close { transition: color .2s, transform .3s var(--ease-spring); }
+.dialog-close:hover { color: var(--ink); transform: rotate(90deg); }
+.ticker-preview.success { animation: preview-in .4s var(--ease-spring); }
+.ticker-preview.success > i { animation: check-in .45s .08s var(--ease-spring) both; }
+
+.connection.connected i { animation: status-breathe 2.4s ease-in-out infinite; }
+.toast.show { animation: toast-in .35s var(--ease-spring); }
+.heatmap-group:hover { box-shadow: 0 20px 52px rgba(23,25,22,.075); }
+.heatmap-toggle:hover i { transform: translateY(-1px) rotate(45deg) scale(1.12); }
+.heatmap-toggle[aria-expanded="false"]:hover i { transform: translateY(1px) rotate(225deg) scale(1.12); }
+.account-popover { transform-origin: top right; animation: popover-in .24s var(--ease-spring); }
+
+@keyframes route-progress { 0%{opacity:1;transform:scaleX(0)} 70%{opacity:1;transform:scaleX(.82)} 100%{opacity:0;transform:scaleX(1)} }
+@keyframes control-select { 50%{transform:scale(1.09)} }
+@keyframes bar-grow { from{transform:scaleX(0)} }
+@keyframes preview-in { from{opacity:0;transform:translateY(-5px) scale(.985)} }
+@keyframes check-in { from{opacity:0;transform:scale(.4) rotate(-35deg)} }
+@keyframes status-breathe { 50%{transform:scale(1.15);box-shadow:0 0 0 7px rgba(29,122,87,0)} }
+@keyframes toast-in { from{transform:translateY(18px) scale(.96);opacity:0} }
+@keyframes popover-in { from{opacity:0;transform:translateY(-7px) scale(.97)} }
+
+@media (hover:none), (max-width:1000px) {
+  .position-card:hover, .heatmap-group:hover { box-shadow:none; }
+  .periods button:hover, .movement-filters button:hover, .asset-filters button:hover { transform:none; }
+}
+
+@media (prefers-reduced-motion:reduce) {
+  body::before { display:none; }
+  .motion-ready [data-motion-state] { opacity:1; transform:none; transition:none; }
+  .brand-mark, .brand-mark svg circle:first-child, .monogram, .focus-monogram, .account-avatar { transition:none; }
+  .connection.connected i, .breadth-bar i, .ticker-preview.success, .ticker-preview.success > i, .toast.show, .account-popover { animation:none; }
+  .primary-button::before, .add-position-button::before, .auth-submit::before { display:none; }
+}
