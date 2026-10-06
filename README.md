@@ -50,6 +50,8 @@ Aperture is a private, multi-user market watchlist built with Next.js. It combin
    MONGODB_URI=mongodb+srv://username:password@cluster.example.mongodb.net/
    MONGODB_DB=aperture
    MARKET_DATA_TTL_MS=60000
+   MARKET_DATA_PROVIDER=yahoo
+   CRON_SECRET=replace-with-a-long-random-secret
    ```
 
 3. Start the development server:
@@ -60,7 +62,7 @@ Aperture is a private, multi-user market watchlist built with Next.js. It combin
 
 4. Open [http://localhost:3000](http://localhost:3000) and create an account.
 
-`MONGODB_URI` is required. `MONGODB_DB` defaults to `aperture`, and `MARKET_DATA_TTL_MS` defaults to 60 seconds.
+`MONGODB_URI` is required. `MONGODB_DB` defaults to `aperture`, `MARKET_DATA_PROVIDER` defaults to `yahoo`, and `MARKET_DATA_TTL_MS` defaults to 60 seconds. `CRON_SECRET` is required only for scheduled refreshes.
 
 ## Commands
 
@@ -95,7 +97,19 @@ The stored resolutions are:
 | `1Y`–`3Y` | 1 day |
 | `Max` | 1 month |
 
-The browser also keeps the signed-in user's latest watchlist response in namespaced local storage. Cached content renders immediately while the API refreshes in the background. Polling pauses in hidden tabs and resumes when the page becomes active.
+The API serves MongoDB snapshots immediately and uses Next.js post-response work to refresh stale provider data without holding up the response. The browser also keeps the signed-in user's latest watchlist response in namespaced local storage. Cached content renders immediately while the API refreshes in the background. Polling pauses in hidden tabs and resumes when the page becomes active.
+
+### Scheduled refresh
+
+Configure a scheduler to call the following endpoint with the same `CRON_SECRET` configured in the application:
+
+```bash
+curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://your-domain.example/api/market-data/refresh
+```
+
+A one-minute schedule keeps quotes warm during active use. Longer history and company-profile requests retain their independent TTLs, so the scheduled job does not redownload every dataset on each run. The job deduplicates tickers shared by multiple users and limits provider concurrency.
+
+Provider SDK calls are isolated under `lib/market-data/providers`. Adding another provider requires implementing the same `chart`, `quote`, and `profile` methods and registering it in `lib/market-data/provider.js`.
 
 ## Authentication and storage
 

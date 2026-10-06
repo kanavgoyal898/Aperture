@@ -1,9 +1,10 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { getDatabase } from "@/lib/mongodb";
-import { hydrateStocks } from "@/lib/yahoo-finance";
+import { getStocksSnapshot, hydrateStocks } from "@/lib/yahoo-finance";
 import { getRequestUser } from "@/lib/auth";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 export async function GET(request) {
   try {
@@ -12,7 +13,10 @@ export async function GET(request) {
     const db = await getDatabase();
     const collection = db.collection("watchlist");
     const stocks = await collection.find({ userId: user._id }, { projection: { ticker: 1, name: 1, sector: 1 } }).sort({ order: 1, createdAt: 1 }).toArray();
-    return NextResponse.json(await hydrateStocks(stocks, db));
+    const snapshot = await getStocksSnapshot(stocks, db);
+    if (!snapshot) return NextResponse.json(await hydrateStocks(stocks, db));
+    after(() => hydrateStocks(stocks, db).catch((error) => console.error("Background watchlist refresh failed", error)));
+    return NextResponse.json(snapshot);
   } catch (error) {
     console.error("Watchlist GET failed", error);
     return NextResponse.json({ error: "Market data is unavailable. Check the MongoDB connection and Yahoo Finance access." }, { status: 503 });

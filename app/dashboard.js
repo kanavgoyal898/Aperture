@@ -29,7 +29,7 @@ const pageDetails = {
   focus: ["The frame", "One ticker. The complete frame."],
   watchlist: ["Your universe", "Every position, precisely organized."],
 };
-const WATCHLIST_CACHE_VERSION = 2;
+const WATCHLIST_CACHE_VERSION = 3;
 const LIVE_REFRESH_INTERVAL_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -117,7 +117,7 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
   const [stocks, setStocks] = useState([]), [query, setQuery] = useState(""), [period, setPeriod] = useState("1D");
   const [focusedTicker, setFocusedTicker] = useState(initialTicker);
   const [modal, setModal] = useState(false), [ticker, setTicker] = useState(""), [notice, setNotice] = useState(""), [storage, setStorage] = useState("loading");
-  const [savingTicker, setSavingTicker] = useState(false), [removingTicker, setRemovingTicker] = useState(""), [signingOut, setSigningOut] = useState(false);
+  const [savingTicker, setSavingTicker] = useState(false), [signingOut, setSigningOut] = useState(false);
   const [refreshing, setRefreshing] = useState(false), [lastUpdated, setLastUpdated] = useState(null);
   const [online, setOnline] = useState(true);
   const [histories, setHistories] = useState({});
@@ -126,6 +126,7 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
   const noticeTimer = useRef(null);
   const refreshNowRef = useRef(null);
   const refreshHistoryRef = useRef(null);
+  const pendingRemovals = useRef(new Set());
   const tickerKey = useMemo(() => stocks.map((stock) => stock.ticker).sort().join(","), [stocks]);
   const viewedStocks = useMemo(() => stocks.map((stock) => ({ ...stock, assetType: stock.assetType === "ETF" ? "ETF" : "Equity", viewedReturn: periodReturn(stock, period), periodHistory: histories[stock.ticker] || [] })), [stocks, period, histories]);
   const sectors = useMemo(() => [...new Set(viewedStocks.map((stock) => stock.sector).filter(Boolean))].sort(), [viewedStocks]);
@@ -186,7 +187,7 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
       const cached = JSON.parse(window.localStorage.getItem(cacheKey) || "null");
       if (cached?.version === WATCHLIST_CACHE_VERSION && Array.isArray(cached.stocks)) {
         hasUsableData = true;
-        setStocks(cached.stocks);
+        setStocks(cached.stocks.filter((stock) => !stock._optimistic));
         setStorage("cached");
         setLastUpdated(Number.isFinite(cached.savedAt) ? new Date(cached.savedAt) : null);
       }
@@ -207,10 +208,14 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
         if (!response.ok) throw new Error(data.error);
         const savedAt = Date.now();
         hasUsableData = true;
-        setStocks(data);
+        setStocks((current) => {
+          const optimistic = current.filter((stock) => stock._optimistic && !data.some((item) => item.ticker === stock.ticker));
+          const next = [...optimistic, ...data.filter((stock) => !pendingRemovals.current.has(stock.ticker))];
+          cacheWatchlist(userKey, next.filter((stock) => !stock._optimistic));
+          return next;
+        });
         setStorage("connected");
         setLastUpdated(new Date(savedAt));
-        cacheWatchlist(userKey, data);
         refreshHistoryRef.current?.();
       } catch (error) {
         if (error.name !== "AbortError" || activeController?.signal.reason === "timeout") {
@@ -288,25 +293,73 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
     event.preventDefault();
     if (savingTicker) return;
     const clean = ticker.trim().toUpperCase();
+    if (stocks.some((stock) => stock.ticker === clean)) { notify(`${clean} is already tracked`); return; }
+    const optimisticStock = {
+      ticker: clean,
+      name: `${clean} · Adding…`,
+      sector: "Pending market data",
+      assetType: "Equity",
+      market: null,
+      returns: {},
+      marketDataStatus: "pending",
+      _optimistic: true,
+    };
     setSavingTicker(true);
+    setStocks((current) => [optimisticStock, ...current]);
+    setModal(false);
     try {
       const response = await fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticker: clean }), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error);
-      setStocks((current) => { const next = [data, ...current]; cacheWatchlist(userKey, next); return next; }); setTicker(""); setModal(false); notify(`${clean} added to Aperture`);
-    } catch (error) { notify(error.message || "Could not add ticker"); }
+      setStocks((current) => {
+        const next = current.some((stock) => stock.ticker === clean)
+          ? current.map((stock) => stock.ticker === clean ? data : stock)
+          : [data, ...current];
+        cacheWatchlist(userKey, next);
+        return next;
+      });
+      setTicker("");
+      refreshHistoryRef.current?.();
+      notify(`${clean} added to Aperture`);
+    } catch (error) {
+      setStocks((current) => {
+        const next = current.filter((stock) => stock.ticker !== clean || !stock._optimistic);
+        cacheWatchlist(userKey, next);
+        return next;
+      });
+      setModal(true);
+      notify(error.message || "Could not add ticker");
+    }
     finally { setSavingTicker(false); }
   }
 
   async function removeTicker(value) {
-    if (removingTicker) return;
-    setRemovingTicker(value);
+    if (pendingRemovals.current.has(value)) return;
+    const removedIndex = stocks.findIndex((stock) => stock.ticker === value);
+    const removedStock = stocks[removedIndex];
+    if (!removedStock || removedStock._optimistic) return;
+    pendingRemovals.current.add(value);
+    setStocks((current) => {
+      const next = current.filter((stock) => stock.ticker !== value);
+      cacheWatchlist(userKey, next);
+      return next;
+    });
     try {
       const response = await fetch(`/api/watchlist/${encodeURIComponent(value)}`, { method: "DELETE", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
       if (!response.ok) throw new Error();
-      setStocks((current) => { const next = current.filter((stock) => stock.ticker !== value); cacheWatchlist(userKey, next); return next; }); notify(`${value} removed from Aperture`);
-    } catch { notify("Could not remove ticker"); }
-    finally { setRemovingTicker(""); }
+      notify(`${value} removed from Aperture`);
+    } catch {
+      setStocks((current) => {
+        if (current.some((stock) => stock.ticker === value)) return current;
+        const next = [...current];
+        next.splice(Math.min(removedIndex, next.length), 0, removedStock);
+        cacheWatchlist(userKey, next);
+        return next;
+      });
+      notify(`Could not remove ${value}; it was restored`);
+    } finally {
+      pendingRemovals.current.delete(value);
+    }
   }
 
   async function signOut() {
@@ -343,7 +396,7 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
     const records = stocks.map((stock) => ({
       schema: "aperture.watchlist.ticker.v1",
       exportedAt,
-      source: "Yahoo Finance via Aperture",
+      source: `${stock.dataProvider || "Market data provider"} via Aperture`,
       ticker: stock.ticker,
       company: stock.name,
       assetType: stock.assetType === "ETF" ? "ETF" : "Equity",
@@ -377,7 +430,7 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
   }
 
   const sortLabel = (column) => sortBy === column ? (sortDirection === "asc" ? "↑" : "↓") : "↕";
-  const stockRow = (stock) => <tr className="stock-row" key={stock.ticker}><td><Link className="company-cell company-link" href={`/focus?ticker=${encodeURIComponent(stock.ticker)}`}><span className="monogram">{stock.ticker.slice(0, 2)}</span><div><b>{stock.ticker}</b><small>{stock.name}</small></div></Link></td><td data-label="Last price">{money(stock.price)}</td><td data-label="Today"><span className={`return ${tone(stock.day)}`}>{percent(stock.day)}</span></td><td data-label={`${period} return`}><span className={`return ${tone(stock.viewedReturn)}`}>{percent(stock.viewedReturn)}</span></td><td data-label="52 week range"><div className="range"><i style={{ left: `${stock.range || 0}%` }}/></div></td><td data-label="Signal"><span className="signal-value">{Number.isFinite(stock.signal) ? stock.signal : "—"}</span><small className="of-100"> / 100</small></td><td className="row-action"><button className="remove" disabled={Boolean(removingTicker)} aria-label={removingTicker === stock.ticker ? `Removing ${stock.ticker}` : `Remove ${stock.ticker} from Aperture`} onClick={() => removeTicker(stock.ticker)}>{removingTicker === stock.ticker ? <span className="button-spinner dark" aria-hidden="true"/> : "×"}</button></td></tr>;
+  const stockRow = (stock) => <tr className={`stock-row ${stock._optimistic ? "optimistic" : ""}`} key={stock.ticker}><td><Link className="company-cell company-link" href={`/focus?ticker=${encodeURIComponent(stock.ticker)}`} aria-disabled={stock._optimistic} tabIndex={stock._optimistic ? -1 : undefined} onClick={(event) => { if (stock._optimistic) event.preventDefault(); }}><span className="monogram">{stock.ticker.slice(0, 2)}</span><div><b>{stock.ticker}</b><small>{stock.name}</small></div></Link></td><td data-label="Last price">{money(stock.price)}</td><td data-label="Today"><span className={`return ${tone(stock.day)}`}>{percent(stock.day)}</span></td><td data-label={`${period} return`}><span className={`return ${tone(stock.viewedReturn)}`}>{percent(stock.viewedReturn)}</span></td><td data-label="52 week range"><div className="range"><i style={{ left: `${stock.range || 0}%` }}/></div></td><td data-label="Signal"><span className="signal-value">{Number.isFinite(stock.signal) ? stock.signal : "—"}</span><small className="of-100"> / 100</small></td><td className="row-action"><button className="remove" disabled={stock._optimistic} aria-label={stock._optimistic ? `Adding ${stock.ticker}` : `Remove ${stock.ticker} from Aperture`} onClick={() => removeTicker(stock.ticker)}>{stock._optimistic ? <span className="button-spinner dark" aria-hidden="true"/> : "×"}</button></td></tr>;
 
   return <div className="shell">
     <header className="site-header">
