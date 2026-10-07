@@ -13,6 +13,7 @@ export async function DELETE(request, { params }) {
     const db = await getDatabase();
     const result = await db.collection("watchlist").deleteOne({ userId: user._id, ticker });
     if (!result.deletedCount) return NextResponse.json({ error: "Ticker not found." }, { status: 404 });
+    await db.collection("alerts").deleteMany({ userId: user._id, ticker });
     return NextResponse.json({ ticker, status: "removed" });
   } catch (error) {
     console.error("Watchlist DELETE failed", error);

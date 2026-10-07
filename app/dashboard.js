@@ -32,6 +32,8 @@ const pageDetails = {
 const WATCHLIST_CACHE_VERSION = 3;
 const LIVE_REFRESH_INTERVAL_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 15_000;
+const benchmarks = { "^GSPC": "S&P 500", "^NDX": "Nasdaq 100" };
+const sessionHours = { US: 6.5, Canada: 6.5, India: 6.25, UK: 8.5, Japan: 6, "Hong Kong": 5.5, China: 4, Australia: 6 };
 
 function watchlistCacheKey(userKey) {
   return userKey ? `aperture:watchlist:${userKey}` : "";
@@ -66,9 +68,51 @@ function chartData(stocks, period) {
   });
   const min = Math.min(...values), max = Math.max(...values), spread = max - min || 1;
   const reference = [...series].sort((a, b) => b.length - a.length)[0] || [];
-  const samples = values.map((value, index) => ({ value, date: reference[index]?.date, x: (index / (values.length - 1)) * 600, y: 180 - ((value - min) / spread) * 140 }));
+  const firstTime = new Date(reference[0]?.date).getTime();
+  const lastTime = new Date(reference.at(-1)?.date).getTime();
+  const market = stocks.find((stock) => stock.market?.name)?.market?.name;
+  const fullSessionMs = (sessionHours[market] || 6.5) * 60 * 60_000;
+  const intradaySpan = Number.isFinite(firstTime) && Number.isFinite(lastTime) ? Math.min(fullSessionMs, Math.max(0, lastTime - firstTime)) : fullSessionMs;
+  const samples = values.map((value, index) => {
+    const date = reference[index]?.date;
+    const time = new Date(date).getTime();
+    const elapsed = Number.isFinite(time) && Number.isFinite(firstTime) ? Math.max(0, time - firstTime) : (index / (values.length - 1)) * intradaySpan;
+    const x = period === "1D" ? Math.min(600, (elapsed / fullSessionMs) * 600) : (index / (values.length - 1)) * 600;
+    return { value, date, x, y: 180 - ((value - min) / spread) * 140 };
+  });
   const points = samples.map(({ x, y }) => `${x},${y}`).join(" ");
-  return { points, area: `0,220 ${points} 600,220`, current: values.at(-1), samples, showTime: periodBars[period].source === "intradayHistory" || periodBars[period].source === "hourlyHistory" };
+  const areaEnd = samples.at(-1).x;
+  return { points, area: `0,220 ${points} ${areaEnd},220`, current: values.at(-1), samples, showTime: periodBars[period].source === "intradayHistory" || periodBars[period].source === "hourlyHistory" };
+}
+
+function comparisonData(primaryHistory = [], benchmarkHistory = []) {
+  const toReturns = (history) => {
+    const base = history[0]?.close;
+    return base ? history.map((bar) => ({ date: bar.date, value: (bar.close / base - 1) * 100 })) : [];
+  };
+  const primary = toReturns(primaryHistory), benchmark = toReturns(benchmarkHistory);
+  if (primary.length < 2 || benchmark.length < 2) return null;
+  const values = [...primary, ...benchmark].map(({ value }) => value);
+  const min = Math.min(...values), max = Math.max(...values), spread = max - min || 1;
+  const points = (series) => series.map(({ value }, index) => `${(index / (series.length - 1)) * 600},${180 - ((value - min) / spread) * 140}`).join(" ");
+  return { primary: points(primary), benchmark: points(benchmark), primaryReturn: primary.at(-1).value, benchmarkReturn: benchmark.at(-1).value };
+}
+
+function signalBreakdown(stock) {
+  const day = Number.isFinite(stock?.day) ? stock.day : 0;
+  const month = Number.isFinite(stock?.month) ? stock.month : 0;
+  return [
+    { label: "Base score", value: 50, note: "Neutral starting point" },
+    { label: "1 month momentum", value: month * 1.5, note: `${percent(month)} × 1.5` },
+    { label: "Session momentum", value: day * 2, note: `${percent(day)} × 2` },
+  ];
+}
+
+function alertMatches(alert, stock) {
+  if (!stock || !Number.isFinite(alert.threshold)) return false;
+  if (alert.condition === "above") return Number.isFinite(stock.price) && stock.price >= alert.threshold;
+  if (alert.condition === "below") return Number.isFinite(stock.price) && stock.price <= alert.threshold;
+  return Number.isFinite(stock.day) && Math.abs(stock.day) >= alert.threshold;
 }
 
 function Freshness({ lastUpdated }) {
@@ -87,13 +131,21 @@ function TimelineChart({ data, fillId, label }) {
   const move = (event) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-    const index = Math.round(ratio * (data.samples.length - 1));
+    const pointerX = ratio * 600;
+    const index = data.samples.reduce((closest, sample, sampleIndex) => Math.abs(sample.x - pointerX) < Math.abs(data.samples[closest].x - pointerX) ? sampleIndex : closest, 0);
     const sample = data.samples[index];
     const parentRect = event.currentTarget.parentElement.getBoundingClientRect();
     setHover({ ...sample, index, left: rect.left - parentRect.left + (sample.x / 600) * rect.width, top: rect.top - parentRect.top + (sample.y / 220) * rect.height });
   };
   const date = hover?.date ? new Intl.DateTimeFormat("en-US", data.showTime ? { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" } : { day: "numeric", month: "short", year: "numeric" }).format(new Date(hover.date)) : "Date unavailable";
   return <><svg className="main-chart interactive-chart" viewBox="0 0 600 220" preserveAspectRatio="none" aria-label={label} onPointerMove={move} onPointerLeave={() => setHover(null)}><defs><linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#1d7a57" stopOpacity=".22"/><stop offset="1" stopColor="#1d7a57" stopOpacity="0"/></linearGradient></defs><polygon points={data.area} fill={`url(#${fillId})`}/><polyline points={data.points} fill="none" stroke="currentColor" strokeWidth="2.5" vectorEffect="non-scaling-stroke"/>{hover && <line x1={hover.x} x2={hover.x} y1="12" y2="205" className="hover-line" vectorEffect="non-scaling-stroke"/>}</svg>{hover && <><i className="chart-hover-dot" style={{ left: hover.left, top: hover.top }}/><div className={`chart-tooltip ${hover.index < 2 ? "edge-left" : hover.index > data.samples.length - 3 ? "edge-right" : ""}`} style={{ left: hover.left, top: hover.top }}><span>{date}</span><strong className={tone(hover.value)}>{percent(hover.value)}</strong></div></>}</>;
+}
+
+function ComparisonChart({ data, label, benchmarkName }) {
+  return <svg className="main-chart comparison-chart" viewBox="0 0 600 220" preserveAspectRatio="none" role="img" aria-label={`${label}; solid line is the position and dashed line is ${benchmarkName}`}>
+    <polyline points={data.benchmark} fill="none" className="benchmark-line" vectorEffect="non-scaling-stroke"/>
+    <polyline points={data.primary} fill="none" className="position-line" vectorEffect="non-scaling-stroke"/>
+  </svg>;
 }
 
 function ApertureMark() {
@@ -123,6 +175,11 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
   const [online, setOnline] = useState(true);
   const [histories, setHistories] = useState({});
   const [theme, setTheme] = useState("light");
+  const [benchmarkTicker, setBenchmarkTicker] = useState("^GSPC"), [benchmark, setBenchmark] = useState(null);
+  const [alerts, setAlerts] = useState([]), [alertsLoading, setAlertsLoading] = useState(true);
+  const [timedAlerts, setTimedAlerts] = useState([]);
+  const [alertCondition, setAlertCondition] = useState("above"), [alertThreshold, setAlertThreshold] = useState("");
+  const [signalOpen, setSignalOpen] = useState(false);
   const [expandedHeatmaps, setExpandedHeatmaps] = useState({ equities: true });
   const [movement, setMovement] = useState("all"), [assetClass, setAssetClass] = useState("all"), [sector, setSector] = useState("all"), [sortBy, setSortBy] = useState("viewedReturn"), [sortDirection, setSortDirection] = useState("desc");
   const noticeTimer = useRef(null);
@@ -148,6 +205,7 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
   const performers = useMemo(() => viewedStocks.filter((stock) => Number.isFinite(stock.viewedReturn)).sort((a, b) => b.viewedReturn - a.viewedReturn), [viewedStocks]);
   const focusedStock = useMemo(() => viewedStocks.find((stock) => stock.ticker === focusedTicker) || performers[0] || viewedStocks[0] || null, [viewedStocks, performers, focusedTicker]);
   const focusedChart = useMemo(() => focusedStock ? chartData([focusedStock], period) : null, [focusedStock, period]);
+  const focusComparison = useMemo(() => comparisonData(focusedStock?.periodHistory, benchmark?.history), [focusedStock, benchmark]);
   const advancing = performers.filter((stock) => stock.viewedReturn >= 0).length;
   const watchlistReturn = performers.length ? performers.reduce((sum, stock) => sum + stock.viewedReturn, 0) / performers.length : null;
   const chart = useMemo(() => chartData(viewedStocks, period), [viewedStocks, period]);
@@ -170,6 +228,11 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
   const marketText = !online || storage === "error" ? "Data offline" : storage === "loading" ? "Connecting" : marketSessions.length ? marketSessions.map(({ name, status }) => `${name} ${status}`).join(" · ") : "Data connected";
   const connectionTitle = `${marketText}${refreshing ? " · Refreshing" : ""}${lastUpdated ? ` · Updated ${new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" }).format(lastUpdated)}` : storage === "cached" ? " · Local cache" : ""}`;
   const marketStatusClass = marketSessions.some(({ status }) => status === "open") ? "session-open" : "session-closed";
+  const triggeredAlerts = useMemo(() => alerts.flatMap((alert) => {
+    const stock = stocks.find((item) => item.ticker === alert.ticker);
+    return alertMatches(alert, stock) ? [{ ...alert, stock }] : [];
+  }), [alerts, stocks]);
+  const briefingMovers = useMemo(() => [...stocks].filter((stock) => Number.isFinite(stock.day)).sort((a, b) => Math.abs(b.day) - Math.abs(a.day)).slice(0, 3), [stocks]);
 
   const notify = (message) => { window.clearTimeout(noticeTimer.current); setNotice(message); noticeTimer.current = window.setTimeout(() => setNotice(""), 2600); };
   const toggleHeatmap = (key) => setExpandedHeatmaps((current) => ({ ...current, [key]: !current[key] }));
@@ -177,6 +240,74 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
   useEffect(() => {
     setTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light");
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const storageKey = `aperture:alerts:${userKey}`;
+    async function loadAlerts() {
+      setAlertsLoading(true);
+      try {
+        let savedAlerts = [];
+        try {
+          const parsed = JSON.parse(window.localStorage.getItem(storageKey) || "[]");
+          savedAlerts = Array.isArray(parsed) ? parsed : [];
+        } catch {}
+        if (savedAlerts.length) {
+          await Promise.all(savedAlerts.map(async ({ ticker: savedTicker, condition, threshold }) => {
+            const response = await fetch("/api/alerts", {
+              method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
+              body: JSON.stringify({ ticker: savedTicker, condition, threshold }),
+            });
+            if (!response.ok) throw new Error("Could not migrate browser alerts.");
+          }));
+          try { window.localStorage.removeItem(storageKey); } catch {}
+        }
+        const response = await fetch("/api/alerts", { cache: "no-store", signal: controller.signal });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error);
+        setAlerts(data);
+      } catch (error) {
+        if (error.name !== "AbortError") notify(error.message || "Alerts are unavailable");
+      } finally {
+        if (!controller.signal.aborted) setAlertsLoading(false);
+      }
+    }
+    loadAlerts();
+    return () => controller.abort();
+  }, [userKey]);
+
+  useEffect(() => {
+    if (storage === "loading" || alertsLoading) return;
+    const key = `aperture:triggered-alerts:${userKey}`;
+    const triggeredIds = triggeredAlerts.map((alert) => alert.id);
+    let previouslyTriggered = [];
+    try { previouslyTriggered = JSON.parse(window.sessionStorage.getItem(key) || "[]"); } catch {}
+    const previous = new Set(Array.isArray(previouslyTriggered) ? previouslyTriggered : []);
+    const newlyTriggered = triggeredAlerts.filter((alert) => !previous.has(alert.id));
+    if (newlyTriggered.length) {
+      setTimedAlerts((current) => {
+        const queued = new Set(current.map((alert) => alert.id));
+        return [...current, ...newlyTriggered.filter((alert) => !queued.has(alert.id))];
+      });
+    }
+    try { window.sessionStorage.setItem(key, JSON.stringify(triggeredIds)); } catch {}
+  }, [triggeredAlerts, storage, alertsLoading, userKey]);
+
+  useEffect(() => {
+    if (!timedAlerts.length) return;
+    const timer = window.setTimeout(() => setTimedAlerts((current) => current.slice(1)), 7000);
+    return () => window.clearTimeout(timer);
+  }, [timedAlerts]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setBenchmark(null);
+    fetch(`/api/benchmark?ticker=${encodeURIComponent(benchmarkTicker)}&period=${encodeURIComponent(period)}`, { cache: "no-store", signal: controller.signal })
+      .then(async (response) => { const data = await response.json(); if (!response.ok) throw new Error(data.error); return data; })
+      .then(setBenchmark)
+      .catch((error) => { if (error.name !== "AbortError") notify(error.message || "Benchmark is unavailable"); });
+    return () => controller.abort();
+  }, [benchmarkTicker, period]);
 
   useEffect(() => {
     const cacheKey = watchlistCacheKey(userKey);
@@ -407,7 +538,10 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
     if (signingOut) return;
     setSigningOut(true);
     await fetch("/api/auth/logout", { method: "POST", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).catch(() => null);
-    try { window.localStorage.removeItem(watchlistCacheKey(userKey)); } catch {}
+    try {
+      window.localStorage.removeItem(watchlistCacheKey(userKey));
+      window.sessionStorage.removeItem(`aperture:triggered-alerts:${userKey}`);
+    } catch {}
     window.location.replace("/login");
   }
 
@@ -465,6 +599,42 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
     notify(`${records.length} ticker${records.length === 1 ? "" : "s"} exported for ingestion`);
   }
 
+  async function addAlert(event) {
+    event.preventDefault();
+    const threshold = Number(alertThreshold);
+    if (!focusedStock || !Number.isFinite(threshold) || threshold <= 0) return;
+    setAlertsLoading(true);
+    try {
+      const response = await fetch("/api/alerts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticker: focusedStock.ticker, condition: alertCondition, threshold }), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+      setAlerts((current) => [data, ...current.filter((alert) => alert.id !== data.id)]);
+      setAlertThreshold("");
+      notify(`Alert created for ${focusedStock.ticker}`);
+    } catch (error) {
+      notify(error.message || "Could not create alert");
+    } finally { setAlertsLoading(false); }
+  }
+
+  async function deleteAlert(alert) {
+    setAlertsLoading(true);
+    try {
+      const response = await fetch(`/api/alerts/${encodeURIComponent(alert.id)}`, { method: "DELETE", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+      setAlerts((current) => current.filter((item) => item.id !== alert.id));
+      notify(`Alert removed for ${alert.ticker}`);
+    } catch (error) {
+      notify(error.message || "Could not remove alert");
+    } finally { setAlertsLoading(false); }
+  }
+
+  function describeAlert(alert) {
+    if (alert.condition === "above") return `Price reaches ${money(alert.threshold)}`;
+    if (alert.condition === "below") return `Price falls to ${money(alert.threshold)}`;
+    return `Daily move reaches ±${alert.threshold.toFixed(1)}%`;
+  }
+
   function sortTable(column) {
     if (sortBy === column) setSortDirection((current) => current === "asc" ? "desc" : "asc");
     else { setSortBy(column); setSortDirection(column === "company" ? "asc" : "desc"); }
@@ -496,11 +666,19 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
 
     <main id="top">
       {view === "overview" ? <section className="hero"><div className="hero-copy"><p className="kicker">Aperture / Market overview</p><h1>See the whole<br/>market picture.</h1><p className="hero-sub">A focused view of the companies that matter to you—performance, momentum, and signal in one frame.</p></div><div className="hero-meta"><span>{String(stocks.length).padStart(2, "0")}</span><p>Companies in focus<br/><b>{advancing} advancing today</b></p></div></section> : <section className="page-masthead"><p className="kicker">Aperture / {pageDetails[view][0]}</p><h1>{pageDetails[view][1]}</h1><p>{stocks.length} tracked positions · {advancing} advancing</p></section>}
-      <section className="control-row" aria-label="Dashboard controls"><div className="periods"><span>Timeframe</span>{Object.keys(periodBars).map((value) => <button key={value} className={period === value ? "active" : ""} onClick={() => setPeriod(value)}>{value}</button>)}</div><div className="live-controls"><Freshness lastUpdated={lastUpdated}/><i>·</i><span>{periodResolution[period]} resolution</span><button type="button" disabled={refreshing || !online} onClick={() => { refreshNowRef.current?.(); refreshHistoryRef.current?.(); }} aria-label={refreshing ? "Refreshing market data" : "Refresh market data now"}>{refreshing ? <span className="button-spinner dark" aria-hidden="true"/> : "↻"} Refresh</button></div></section>
-      {storage !== "loading" && view === "overview" && <section className="overview-grid">
-        <article className="performance-panel"><div className="panel-top"><div><p className="label">Aggregate performance</p><h2 className={tone(watchlistReturn)}>{percent(watchlistReturn)}</h2><p>Across your Aperture watchlist · {period}</p></div><span className={`trend-badge ${tone(chart?.current)}`}><ArrowIcon /> {percent(chart?.current)}</span></div><div className="chart-wrap"><div className="chart-grid"><span>High</span><span>Avg</span><span>Low</span></div>{chart ? <TimelineChart data={chart} fillId="chartFill" label={`Watchlist performance over ${period}`}/> : <div className="chart-empty">Market history will appear here</div>}<div className="chart-axis"><span>Open</span><span>Midpoint</span><span>Latest</span></div></div></article>
-        <aside className="stats-panel"><article><p className="label">Market breadth</p><div className="stat-line"><strong>{breadth}%</strong><span className="positive">{advancing} of {performers.length}</span></div><div className="breadth-bar"><i style={{ width: `${breadth}%` }}/></div><p>of tracked names are advancing</p></article><article><p className="label">Leading position</p>{performers[0] ? <Link className="leader ticker-link" href={`/focus?ticker=${encodeURIComponent(performers[0].ticker)}`}><span className="monogram">{performers[0].ticker.slice(0, 2)}</span><div><strong>{performers[0].ticker}</strong><p>{performers[0].name}</p></div><b className={tone(performers[0].viewedReturn)}>{percent(performers[0].viewedReturn)}</b></Link> : <div className="leader"><span className="monogram">—</span><div><strong>No data</strong><p>Awaiting market feed</p></div><b>—</b></div>}</article><article><p className="label">Aperture signal</p><div className="signal-summary"><strong>{Math.round(performers.reduce((sum, stock) => sum + (stock.signal || 0), 0) / (performers.length || 1))}</strong><span>/ 100<br/><b>Aggregate momentum</b></span></div></article></aside>
+      {storage !== "loading" && (view === "heatmap" || view === "watchlist") && <section className="route-kpis" aria-label={`${pageDetails[view][0]} key metrics`}>
+        <article><span>Tracked</span><strong>{stocks.length}</strong><p>positions in your universe</p></article>
+        <article><span>Advancing</span><strong className="positive">{breadth}%</strong><p>{advancing} of {performers.length} with data</p></article>
+        <article><span>{period} average</span><strong className={tone(watchlistReturn)}>{percent(watchlistReturn)}</strong><p>equal-weighted return</p></article>
+        <article><span>Active alerts</span><strong>{alerts.length}</strong><p>{triggeredAlerts.length ? `${triggeredAlerts.length} triggered now` : "no thresholds reached"}</p></article>
       </section>}
+      <section className="control-row" aria-label="Dashboard controls"><div className="periods"><span>Timeframe</span>{Object.keys(periodBars).map((value) => <button key={value} className={period === value ? "active" : ""} onClick={() => setPeriod(value)}>{value}</button>)}</div><div className="live-controls"><Freshness lastUpdated={lastUpdated}/><i>·</i><span>{periodResolution[period]} resolution</span><button type="button" disabled={refreshing || !online} onClick={() => { refreshNowRef.current?.(); refreshHistoryRef.current?.(); }} aria-label={refreshing ? "Refreshing market data" : "Refresh market data now"}>{refreshing ? <span className="button-spinner dark" aria-hidden="true"/> : "↻"} Refresh</button></div></section>
+      {storage !== "loading" && view === "overview" && stocks.length === 0 && <section className="onboarding-panel"><div><p className="kicker">Your first frame</p><h2>Start with the market you know.</h2><p>Add a company, fund, or index ticker. Aperture will build the performance view, signal, briefing, and Focus workspace around it.</p><button className="primary-button" onClick={() => setModal(true)}>＋ Add your first position</button></div><ol><li><span>01</span><div><strong>Add a ticker</strong><p>Search any Yahoo Finance symbol.</p></div></li><li><span>02</span><div><strong>Choose a benchmark</strong><p>Measure performance in context.</p></div></li><li><span>03</span><div><strong>Create an alert</strong><p>Return when a threshold matters.</p></div></li></ol></section>}
+      {storage !== "loading" && view === "overview" && <section className="overview-grid">
+        <article className="performance-panel"><div className="panel-top"><div><p className="label">Equal-weighted watchlist</p><h2 className={tone(watchlistReturn)}>{percent(watchlistReturn)}</h2><p>Average return across tracked positions · {period}</p></div><div className="benchmark-summary"><label>Benchmark<select value={benchmarkTicker} onChange={(event) => setBenchmarkTicker(event.target.value)}>{Object.entries(benchmarks).map(([tickerValue, name]) => <option key={tickerValue} value={tickerValue}>{name}</option>)}</select></label><strong className={tone(benchmark?.returns?.[period])}>{percent(benchmark?.returns?.[period])}</strong><small>{Number.isFinite(watchlistReturn) && Number.isFinite(benchmark?.returns?.[period]) ? `${watchlistReturn - benchmark.returns[period] >= 0 ? "+" : ""}${(watchlistReturn - benchmark.returns[period]).toFixed(2)}% relative` : "Comparing…"}</small></div></div><div className="chart-wrap"><div className="chart-grid"><span>High</span><span>Avg</span><span>Low</span></div>{chart ? <TimelineChart data={chart} fillId="chartFill" label={`Watchlist performance over ${period}`}/> : <div className="chart-empty">Add a position to begin the performance view</div>}<div className="chart-axis"><span>Open</span><span>Midpoint</span><span>Latest</span></div></div></article>
+        <aside className="stats-panel"><article><p className="label">Market breadth</p><div className="stat-line"><strong>{breadth}%</strong><span className="positive">{advancing} of {performers.length}</span></div><div className="breadth-bar"><i style={{ width: `${breadth}%` }}/></div><p>of tracked names are advancing</p></article><article><p className="label">Leading position</p>{performers[0] ? <Link className="leader ticker-link" href={`/focus?ticker=${encodeURIComponent(performers[0].ticker)}`}><span className="monogram">{performers[0].ticker.slice(0, 2)}</span><div><strong>{performers[0].ticker}</strong><p>{performers[0].name}</p></div><b className={tone(performers[0].viewedReturn)}>{percent(performers[0].viewedReturn)}</b></Link> : <div className="leader"><span className="monogram">—</span><div><strong>No data</strong><p>Add your first position</p></div><b>—</b></div>}</article><article><div className="label-row"><p className="label">Aperture signal</p><button type="button" onClick={() => setSignalOpen((current) => !current)} aria-expanded={signalOpen}>How it works</button></div><div className="signal-summary"><strong>{performers.length ? Math.round(performers.reduce((sum, stock) => sum + (stock.signal || 0), 0) / performers.length) : "—"}</strong><span>/ 100<br/><b>Aggregate momentum</b></span></div>{signalOpen && <div className="signal-explainer"><p>Each position starts at 50. Aperture adds 1.5 points per percentage point of one-month return and 2 points per percentage point of today’s move, then caps the score from 0 to 100.</p><small>Momentum indicator only—not a recommendation.</small></div>}</article></aside>
+      </section>}
+      {storage !== "loading" && view === "overview" && stocks.length > 0 && <section className="briefing-section"><div className="briefing-heading"><div><p className="kicker">Daily briefing</p><h2>What deserves attention</h2></div><span>{new Intl.DateTimeFormat("en-US", { weekday: "long", month: "short", day: "numeric" }).format(new Date())}</span></div><div className="briefing-grid"><article className="briefing-lead"><span>{triggeredAlerts.length ? "Alert activity" : "Market pulse"}</span><h3>{triggeredAlerts.length ? `${triggeredAlerts.length} threshold${triggeredAlerts.length === 1 ? " has" : "s have"} been reached.` : `${advancing} of ${performers.length} positions are advancing.`}</h3><p>{triggeredAlerts.length ? "Review the triggered conditions below." : "No alert thresholds are active right now."}</p></article><article><span>Largest moves today</span><div className="briefing-list">{briefingMovers.map((stock) => <Link href={`/focus?ticker=${encodeURIComponent(stock.ticker)}`} key={stock.ticker}><b>{stock.ticker}</b><small>{stock.name}</small><strong className={tone(stock.day)}>{percent(stock.day)}</strong></Link>)}</div></article><article><span>Triggered alerts</span><div className="briefing-list">{triggeredAlerts.length ? triggeredAlerts.slice(0, 3).map((alert) => <Link href={`/focus?ticker=${encodeURIComponent(alert.ticker)}`} key={alert.id}><b>{alert.ticker}</b><small>{describeAlert(alert)}</small><strong>Reached</strong></Link>) : <div className="quiet-state">Create price or movement alerts from any Focus page.</div>}</div></article></div></section>}
 
       {storage !== "loading" && view === "heatmap" && <section className="heatmap-section route-section">
         <div className="section-title heatmap-title"><div><p className="kicker">Market field</p><h2>Performance field</h2></div><div className="heat-legend" aria-label="Continuous heat map scale"><span>Decline</span><i/><span>Advance</span></div></div>
@@ -513,9 +691,10 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
       {storage !== "loading" && view === "focus" && <section className="focus-section route-section">
         <div className="focus-toolbar"><div><p className="kicker">Single-security view</p><h2>{focusedStock?.name || "Choose a position"}</h2></div><label className="ticker-selector"><span>Position</span><select value={focusedStock?.ticker || ""} onChange={(event) => { const value = event.target.value; setFocusedTicker(value); router.replace(`/focus?ticker=${encodeURIComponent(value)}`, { scroll: false }); }} aria-label="Choose a ticker to focus">{[...viewedStocks].sort((a, b) => a.ticker.localeCompare(b.ticker)).map((stock) => <option value={stock.ticker} key={stock.ticker}>{stock.ticker} — {stock.name}</option>)}</select></label></div>
         {focusedStock ? <div className="focus-workspace">
-          <article className="focus-primary"><div className="focus-identity"><span className="focus-monogram">{focusedStock.ticker.slice(0, 2)}</span><div><span>{focusedStock.assetType} · {focusedStock.sector}</span><h3>{focusedStock.ticker}</h3></div><strong>{money(focusedStock.price)}</strong></div><div className="focus-return"><span>{period} return</span><b className={tone(focusedStock.viewedReturn)}>{percent(focusedStock.viewedReturn)}</b></div><div className="focus-chart"><div className="chart-grid"><span>High</span><span>Avg</span><span>Low</span></div>{focusedChart ? <TimelineChart data={focusedChart} fillId="focusFill" label={`${focusedStock.ticker} performance over ${period}`}/> : <div className="chart-empty">Price history is unavailable</div>}</div></article>
-          <aside className="focus-metrics"><article><span>Today</span><strong className={tone(focusedStock.day)}>{percent(focusedStock.day)}</strong><p>Latest market session</p></article><article><span>Aperture signal</span><strong>{Number.isFinite(focusedStock.signal) ? focusedStock.signal : "—"}<small> / 100</small></strong><p>Price momentum score</p></article><article><span>52 week position</span><strong>{Number.isFinite(focusedStock.range) ? `${Math.round(focusedStock.range)}%` : "—"}</strong><div className="focus-range"><i style={{ left: `${focusedStock.range || 0}%` }}/></div></article><article><span>Market</span><strong className={focusedStock.market?.status === "open" ? "positive" : "neutral"}>{focusedStock.market ? `${focusedStock.market.name} ${focusedStock.market.status}` : "Unavailable"}</strong><p>Regular trading session</p></article></aside>
-        </div> : <div className="focus-empty">Add a ticker to create a focused view.</div>}
+          <article className="focus-primary"><div className="focus-identity"><span className="focus-monogram">{focusedStock.ticker.slice(0, 2)}</span><div><span>{focusedStock.assetType} · {focusedStock.sector}</span><h3>{focusedStock.ticker}</h3></div><strong>{money(focusedStock.price)}</strong></div><div className="focus-chart-head"><div className="focus-return"><span>{period} return</span><b className={tone(focusedStock.viewedReturn)}>{percent(focusedStock.viewedReturn)}</b></div><label>Compare with<select value={benchmarkTicker} onChange={(event) => setBenchmarkTicker(event.target.value)}>{Object.entries(benchmarks).map(([tickerValue, name]) => <option key={tickerValue} value={tickerValue}>{name}</option>)}</select></label></div><div className="focus-chart"><div className="chart-grid"><span>High</span><span>Avg</span><span>Low</span></div>{focusComparison ? <ComparisonChart data={focusComparison} label={`${focusedStock.ticker} performance over ${period}`} benchmarkName={benchmarks[benchmarkTicker]}/> : focusedChart ? <TimelineChart data={focusedChart} fillId="focusFill" label={`${focusedStock.ticker} performance over ${period}`}/> : <div className="chart-empty">Price history is unavailable</div>}</div>{focusComparison && <div className="comparison-legend"><span><i/> {focusedStock.ticker} <b className={tone(focusComparison.primaryReturn)}>{percent(focusComparison.primaryReturn)}</b></span><span><i/> {benchmarks[benchmarkTicker]} <b className={tone(focusComparison.benchmarkReturn)}>{percent(focusComparison.benchmarkReturn)}</b></span><strong className={tone(focusComparison.primaryReturn - focusComparison.benchmarkReturn)}>{percent(focusComparison.primaryReturn - focusComparison.benchmarkReturn)} relative</strong></div>}</article>
+          <aside className="focus-metrics"><article><span>Today</span><strong className={tone(focusedStock.day)}>{percent(focusedStock.day)}</strong><p>Latest market session</p></article><article className="signal-card"><div><span>Aperture signal</span><button type="button" onClick={() => setSignalOpen((current) => !current)} aria-expanded={signalOpen}>?</button></div><strong>{Number.isFinite(focusedStock.signal) ? focusedStock.signal : "—"}<small> / 100</small></strong><p>Price momentum score</p>{signalOpen && <div className="signal-breakdown">{signalBreakdown(focusedStock).map((item) => <div key={item.label}><span>{item.label}<small>{item.note}</small></span><b className={tone(item.value)}>{item.value > 0 ? "+" : ""}{item.value.toFixed(1)}</b></div>)}<p>Rounded and capped between 0 and 100. Momentum is descriptive, not predictive.</p></div>}</article><article><span>52 week position</span><strong>{Number.isFinite(focusedStock.range) ? `${Math.round(focusedStock.range)}%` : "—"}</strong><div className="focus-range"><i style={{ left: `${focusedStock.range || 0}%` }}/></div><p>{money(focusedStock.fiftyTwoWeekLow)} low · {money(focusedStock.fiftyTwoWeekHigh)} high</p></article><article><span>Market</span><strong className={focusedStock.market?.status === "open" ? "positive" : "neutral"}>{focusedStock.market ? `${focusedStock.market.name} ${focusedStock.market.status}` : "Unavailable"}</strong><p>Regular trading session</p></article></aside>
+          <section className="focus-details"><article><p className="label">Return profile</p><div className="return-profile">{Object.keys(periodBars).map((timeframe) => <div key={timeframe}><span>{timeframe}</span><strong className={tone(periodReturn(focusedStock, timeframe))}>{percent(periodReturn(focusedStock, timeframe))}</strong></div>)}</div></article><article><p className="label">Set an alert</p><form className="alert-form" onSubmit={addAlert}><select aria-label="Alert condition" value={alertCondition} disabled={alertsLoading} onChange={(event) => setAlertCondition(event.target.value)}><option value="above">Price rises above</option><option value="below">Price falls below</option><option value="move">Daily move reaches</option></select><div><span>{alertCondition === "move" ? "%" : "$"}</span><input type="number" min="0.01" step="0.01" required disabled={alertsLoading} value={alertThreshold} onChange={(event) => setAlertThreshold(event.target.value)} placeholder={alertCondition === "move" ? "5.00" : String(Math.round(focusedStock.price || 100))}/></div><button className="primary-button" disabled={alertsLoading}>{alertsLoading ? "Saving…" : "Create alert"}</button></form><div className="active-alerts">{alerts.filter((alert) => alert.ticker === focusedStock.ticker).map((alert) => <div key={alert.id}><span><b>{describeAlert(alert)}</b><small>{alertMatches(alert, focusedStock) ? "Triggered now" : "Watching"}</small></span><button type="button" disabled={alertsLoading} onClick={() => deleteAlert(alert)} aria-label={`Delete alert: ${describeAlert(alert)}`}>×</button></div>)}{!alertsLoading && !alerts.some((alert) => alert.ticker === focusedStock.ticker) && <p>No alerts for this position yet.</p>}</div></article></section>
+        </div> : <div className="focus-empty"><span className="dialog-mark"><ApertureMark /></span><h2>Bring one position into focus.</h2><p>Add a ticker to compare performance, understand its signal, and create an alert.</p><button className="primary-button" onClick={() => setModal(true)}>＋ Add your first position</button></div>}
       </section>}
 
       {storage !== "loading" && view === "watchlist" && <section className="watchlist-section route-section">
@@ -535,11 +714,18 @@ export default function Dashboard({ view = "overview", initialTicker = "", userK
           <th><button className={sortBy === "range" ? "active" : ""} onClick={() => sortTable("range")}>52 week range <span>{sortLabel("range")}</span></button></th>
           <th><button className={sortBy === "signal" ? "active" : ""} onClick={() => sortTable("signal")}>Signal <span>{sortLabel("signal")}</span></button></th>
           <th><span className="sr-only">Actions</span></th>
-        </tr></thead>{[["Equity", "Equities"], ["ETF", "Exchange-traded funds"]].map(([type, label]) => { const group = shown.filter((stock) => stock.assetType === type); return group.length > 0 && <tbody key={type}><tr className="asset-group-row"><td colSpan="8"><span>{label}</span><b>{group.length}</b></td></tr>{group.map(stockRow)}</tbody>; })}</table>{shown.length === 0 && <div className="empty-state"><strong>No positions found</strong><p>Adjust your search or filters to see more of your watchlist.</p><button onClick={() => { setQuery(""); setMovement("all"); setAssetClass("all"); setSector("all"); }}>Clear filters</button></div>}</div>
+        </tr></thead>{[["Equity", "Equities"], ["ETF", "Exchange-traded funds"]].map(([type, label]) => { const group = shown.filter((stock) => stock.assetType === type); return group.length > 0 && <tbody key={type}><tr className="asset-group-row"><td colSpan="8"><span>{label}</span><b>{group.length}</b></td></tr>{group.map(stockRow)}</tbody>; })}</table>{shown.length === 0 && <div className="empty-state"><strong>{stocks.length ? "No positions found" : "Your universe is ready to take shape"}</strong><p>{stocks.length ? "Adjust your search or filters to see more of your watchlist." : "Add a company or fund to create your first watchlist view."}</p><button onClick={() => stocks.length ? (setQuery(""), setMovement("all"), setAssetClass("all"), setSector("all")) : setModal(true)}>{stocks.length ? "Clear filters" : "Add first position"}</button></div>}</div>
       </section>}
     </main>
 
     <footer><div className="brand footer-brand"><span className="brand-mark"><ApertureMark /></span><span>Aperture</span></div><p>Clarity for considered investors.</p><span>Market data via Yahoo Finance · Informational only</span></footer>
+    {timedAlerts[0] && <aside className="timed-alert" role="alert" aria-label={`Alert triggered for ${timedAlerts[0].ticker}`}>
+      <div className="timed-alert-mark" aria-hidden="true">!</div>
+      <div><span>Threshold reached</span><strong>{timedAlerts[0].ticker} · {describeAlert(timedAlerts[0])}</strong><p>{money(timedAlerts[0].stock?.price)} now · {percent(timedAlerts[0].stock?.day)} today</p></div>
+      <Link href={`/focus?ticker=${encodeURIComponent(timedAlerts[0].ticker)}`} onClick={() => setTimedAlerts((current) => current.slice(1))}>View</Link>
+      <button type="button" onClick={() => setTimedAlerts((current) => current.slice(1))} aria-label="Dismiss alert">×</button>
+      <i aria-hidden="true" />
+    </aside>}
     {modal && <div className="modal" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !savingTicker) setModal(false); }}><form className="dialog" onSubmit={addTicker} role="dialog" aria-modal="true" aria-labelledby="dialog-title" aria-busy={savingTicker}><button className="dialog-close" type="button" disabled={savingTicker} onClick={() => setModal(false)} aria-label="Close">×</button><span className="dialog-mark"><ApertureMark /></span><p className="kicker">Expand your view</p><h2 id="dialog-title">Add to Aperture</h2><p>Enter a market ticker to bring the company into your watchlist.</p><label>Ticker symbol<input autoFocus value={ticker} disabled={savingTicker} onChange={(event) => setTicker(event.target.value.toUpperCase())} maxLength="12" placeholder="e.g. AAPL" required aria-describedby="ticker-preview"/></label><div id="ticker-preview" className={`ticker-preview ${tickerPreview.status}`} aria-live="polite">{tickerPreview.status === "loading" && <><span className="button-spinner dark" aria-hidden="true"/><p>Looking up {tickerPreview.ticker}…</p></>}{tickerPreview.status === "success" && <><span className="ticker-preview-mark">{tickerPreview.ticker.slice(0, 2)}</span><div><strong>{tickerPreview.name}</strong><small>{tickerPreview.ticker} · {tickerPreview.assetType}{tickerPreview.exchange ? ` · ${tickerPreview.exchange}` : ""}</small></div><i aria-label="Ticker found">✓</i></>}{tickerPreview.status === "error" && <p>{tickerPreview.message}</p>}</div><div className="dialog-actions"><button className="secondary-button" type="button" disabled={savingTicker} onClick={() => setModal(false)}>Cancel</button><button className="primary-button" disabled={savingTicker || tickerPreview.status !== "success"} type="submit">{savingTicker && <span className="button-spinner" aria-hidden="true"/>}{savingTicker ? "Adding…" : "Add position"}</button></div></form></div>}
     <div className={`toast ${notice ? "show" : ""}`} role="status">{notice}</div>
   </div>;

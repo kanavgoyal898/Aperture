@@ -16,9 +16,13 @@ Aperture is a private, multi-user market watchlist built with Next.js. It combin
 - Timeframes: `1D`, `1W`, `1M`, `3M`, `6M`, `1Y`, `3Y`, and `Max`
 - High-resolution five-minute, hourly, daily, and monthly history
 - Interactive timeline charts with hover details
+- S&P 500 and Nasdaq 100 benchmark comparisons
+- Transparent Aperture signal breakdowns based on session and one-month momentum
+- Account-synced price and daily-move alerts with a live daily briefing
 - Separate ECharts performance treemaps for equities and ETFs
 - Search, filtering, grouping, and sortable watchlist tables
-- Dedicated `/focus` view for individual tickers
+- Dedicated `/focus` view with benchmark overlays, multi-period returns, 52-week levels, and alerts
+- Guided onboarding and purpose-built empty states
 - Responsive light and dark themes
 - LLM-ready JSONL watchlist export
 
@@ -120,6 +124,7 @@ The application creates and manages these collections:
 - `users`
 - `sessions`
 - `watchlist`
+- `alerts`
 - `market_data`
 
 Never commit `.env` or a MongoDB connection string.

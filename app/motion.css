@@ -65,7 +65,23 @@ button:not(:disabled):active { transform: translateY(1px) scale(.98); }
 
 .periods button, .movement-filters button, .asset-filters button { transition: color var(--motion-fast), background var(--motion-fast), transform var(--motion-fast) !important; }
 .periods button:hover, .movement-filters button:hover, .asset-filters button:hover { transform: translateY(-2px); }
+.periods button:hover,
+.periods button:not(:disabled):active { transform: none; }
 .periods button.active, .movement-filters button.active, .asset-filters button.active { animation: control-select .35s var(--ease-spring); }
+.periods button { isolation: isolate; }
+.periods button::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--ink);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform .28s var(--ease-out);
+}
+.periods button.active { background: transparent; animation: none; }
+.periods button.active::before { transform: scaleX(1); }
 
 .position-card, .heatmap-group, .focus-workspace, .table-wrap {
   transition: transform .35s var(--ease-out), box-shadow .35s var(--ease-out), background-color .3s ease, border-color .3s ease;

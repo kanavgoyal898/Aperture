@@ -81,6 +81,10 @@ export default function PerformanceTreemap({ stocks, period, theme, groupLabel =
       },
       series: [{
         type: "treemap",
+        top: 10,
+        right: 10,
+        bottom: 10,
+        left: 10,
         roam: false,
         nodeClick: false,
         breadcrumb: { show: false },
@@ -120,7 +124,7 @@ export default function PerformanceTreemap({ stocks, period, theme, groupLabel =
         },
         upperLabel: { show: false },
         itemStyle: { borderColor: dark ? "#11130f" : "#f2f0e9", borderWidth: 3, gapWidth: 3, borderRadius: 0 },
-        emphasis: { focus: "none", scale: false, itemStyle: { borderColor: dark ? "#f0efe8" : "#171916", borderWidth: 2, shadowBlur: 18, shadowColor: dark ? "rgba(0,0,0,.45)" : "rgba(23,25,22,.2)" }, label: { show: true } },
+        emphasis: { focus: "none", scale: false, itemStyle: { borderColor: dark ? "#f0efe8" : "#171916", borderWidth: 3, shadowBlur: 0 }, label: { show: true } },
       }],
     });
 
